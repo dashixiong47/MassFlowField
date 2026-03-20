@@ -1,115 +1,61 @@
 ﻿#pragma once
 #include "CoreMinimal.h"
-#include "MassReplicationTypes.h"
-#include "MassClientBubbleHandler.h"
-#include "MassClientBubbleInfoBase.h"
-#include "MassClientBubbleSerializerBase.h"
-#include "MassCommonFragments.h"
-#include "MassReplicationProcessor.h"
-#include "MassReplicationFragments.h"
-#include "MassReplicationTransformHandlers.h"
+#include "MassReplication/Public/MassReplicationTypes.h"
+#include "MassReplication/Public/MassClientBubbleHandler.h"
+#include "MassReplication/Public/MassClientBubbleInfoBase.h"
+#include "MassReplication/Public/MassClientBubbleSerializerBase.h"
+#include "MassReplication/Public/MassReplicationProcessor.h"
+#include "MassReplication/Public/MassReplicationFragments.h"
+#include "MassReplication/Public/MassReplicationTransformHandlers.h"
+#include "MassCommon/Public/MassCommonFragments.h"
 #include "Net/UnrealNetwork.h"
 #include "MassAI/FlowFieldAgentFragment.h"
+#include "MassReplication/FlowFieldReplicatedAgentBase.h"
+#include "MassReplication/FlowFieldAgentReplicatorBase.h"
+#include "MassReplication/FlowFieldBubbleHandlerBase.h"
 #include "FlowFieldAgentReplicator.generated.h"
 
-// ── 1. 同步数据结构 ─────────────────────────────────────────────
-USTRUCT()
-struct FLOWFIELD_API FFlowFieldReplicatedAgent : public FReplicatedAgentBase
-{
-    GENERATED_BODY()
-
-    FReplicatedAgentPositionYawData& GetReplicatedPositionYawDataMutable()
-    {
-        return PositionYawData;
-    }
-
-    const FReplicatedAgentPositionYawData& GetReplicatedPositionYawData() const
-    {
-        return PositionYawData;
-    }
-
-    uint8 GetAnimFlags() const { return AnimFlags; }
-    void  SetAnimFlags(uint8 InFlags) { AnimFlags = InFlags; }
-
-private:
-    UPROPERTY()
-    FReplicatedAgentPositionYawData PositionYawData;
-
-    UPROPERTY()
-    uint8 AnimFlags = 0;
-};
-
-// ── 2. FastArray Item ─────────────────────────────────────────────
+// ── FastArray Item ─────────────────────────────────────────────────
 USTRUCT()
 struct FLOWFIELD_API FFlowFieldFastArrayItem : public FMassFastArrayItemBase
 {
     GENERATED_BODY()
-
     typedef FFlowFieldReplicatedAgent FReplicatedAgentType;
-
     FFlowFieldFastArrayItem() = default;
-
-    FFlowFieldFastArrayItem(const FFlowFieldReplicatedAgent& InAgent, const FMassReplicatedAgentHandle InHandle)
-        : FMassFastArrayItemBase(InHandle)
-        , Agent(InAgent)
-    {}
-
+    FFlowFieldFastArrayItem(const FFlowFieldReplicatedAgent& InAgent,
+                             const FMassReplicatedAgentHandle InHandle)
+        : FMassFastArrayItemBase(InHandle), Agent(InAgent) {}
     UPROPERTY()
     FFlowFieldReplicatedAgent Agent;
 };
 
-// ── 3. BubbleHandler ─────────────────────────────────────────────
+// ── BubbleHandler（插件默认，Apply 在 cpp 里实现）─────────────────
 class FLOWFIELD_API FFlowFieldClientBubbleHandler
-    : public TClientBubbleHandlerBase<FFlowFieldFastArrayItem>
+    : public TFlowFieldBubbleHandlerBase<FFlowFieldFastArrayItem, FFlowFieldReplicatedAgent>
 {
-public:
-    TMassClientBubbleTransformHandler<FFlowFieldFastArrayItem> TransformHandler;
-
-    FFlowFieldClientBubbleHandler()
-        : TransformHandler(*this)
-    {}
-
-#if UE_REPLICATION_COMPILE_SERVER_CODE
-    FFlowFieldFastArrayItem* GetMutableItem(FMassReplicatedAgentHandle Handle)
-    {
-        if (AgentHandleManager.IsValidHandle(Handle))
-        {
-            const FMassAgentLookupData& LookUpData = AgentLookupArray[Handle.GetIndex()];
-            return &(*Agents)[LookUpData.AgentsIdx];
-        }
-        return nullptr;
-    }
-
-    void MarkItemDirty(FFlowFieldFastArrayItem& Item) const
-    {
-        Serializer->MarkItemDirty(Item);
-    }
-#endif
-
 #if UE_REPLICATION_COMPILE_CLIENT_CODE
-    virtual void PostReplicatedAdd(const TArrayView<int32> AddedIndices, int32 FinalSize) override;
-    virtual void PostReplicatedChange(const TArrayView<int32> ChangedIndices, int32 FinalSize) override;
+protected:
+    virtual void ApplyCustomDataOnSpawn(
+        const FMassEntityView& EntityView,
+        const FFlowFieldReplicatedAgent& Item) override;
+    virtual void ApplyCustomDataOnChange(
+        const FMassEntityView& EntityView,
+        const FFlowFieldReplicatedAgent& Item) override;
 #endif
 };
 
-// ── 4. Serializer ─────────────────────────────────────────────
+// ── Serializer ─────────────────────────────────────────────────────
 USTRUCT()
 struct FLOWFIELD_API FFlowFieldClientBubbleSerializer : public FMassClientBubbleSerializerBase
 {
     GENERATED_BODY()
-
-    FFlowFieldClientBubbleSerializer()
-    {
-        Bubble.Initialize(Entities, *this);
-    }
-
+    FFlowFieldClientBubbleSerializer() { Bubble.Initialize(Entities, *this); }
     bool NetDeltaSerialize(FNetDeltaSerializeInfo& DeltaParams)
     {
-        return FFastArraySerializer::FastArrayDeltaSerialize<FFlowFieldFastArrayItem, FFlowFieldClientBubbleSerializer>(Entities, DeltaParams, *this);
+        return FFastArraySerializer::FastArrayDeltaSerialize<
+            FFlowFieldFastArrayItem, FFlowFieldClientBubbleSerializer>(Entities, DeltaParams, *this);
     }
-
     FFlowFieldClientBubbleHandler Bubble;
-
 protected:
     UPROPERTY(Transient)
     TArray<FFlowFieldFastArrayItem> Entities;
@@ -119,39 +65,30 @@ template<>
 struct TStructOpsTypeTraits<FFlowFieldClientBubbleSerializer>
     : public TStructOpsTypeTraitsBase2<FFlowFieldClientBubbleSerializer>
 {
-    enum
-    {
-        WithNetDeltaSerializer = true,
-        WithCopy = false,
-    };
+    enum { WithNetDeltaSerializer = true, WithCopy = false };
 };
 
-// ── 5. Replicator ─────────────────────────────────────────────
+// ── Replicator（插件默认，仅同步位置+Yaw）─────────────────────────
 UCLASS()
-class FLOWFIELD_API UFlowFieldAgentReplicator : public UMassReplicatorBase
+class FLOWFIELD_API UFlowFieldAgentReplicator : public UFlowFieldAgentReplicatorBase
 {
     GENERATED_BODY()
-public:
-
-    virtual void AddRequirements(FMassEntityQuery& EntityQuery) override;
-    virtual void ProcessClientReplication(FMassExecutionContext& Context, FMassReplicationContext& ReplicationContext) override;
-
-private:
-    FMassReplicationProcessorPositionYawHandler PositionYawHandler;
-
+protected:
+    virtual void ProcessClientReplicationInternal(
+        FMassExecutionContext& Context,
+        FMassReplicationContext& RepContext) override;
 };
 
-// ── 6. BubbleInfo ─────────────────────────────────────────────
+// ── BubbleInfo Actor ───────────────────────────────────────────────
 UCLASS()
 class FLOWFIELD_API AFlowFieldClientBubbleInfo : public AMassClientBubbleInfoBase
 {
     GENERATED_BODY()
 public:
     AFlowFieldClientBubbleInfo(const FObjectInitializer& ObjectInitializer);
-    virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-
+    virtual void GetLifetimeReplicatedProps(
+        TArray<FLifetimeProperty>& OutLifetimeProps) const override;
     FFlowFieldClientBubbleSerializer& GetBubbleSerializer() { return BubbleSerializer; }
-
 protected:
     UPROPERTY(Replicated, Transient)
     FFlowFieldClientBubbleSerializer BubbleSerializer;

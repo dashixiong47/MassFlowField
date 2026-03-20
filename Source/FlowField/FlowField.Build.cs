@@ -14,6 +14,7 @@ public class FlowField : ModuleRules
 				"Core",
 				"CoreUObject",
 				"Engine",
+				"DeveloperSettings",
 
 				// Mass 框架
 				"MassEntity",

@@ -146,7 +146,7 @@ void UFlowFieldBoidsProcessor::Execute(
             float Dist = Diff.Size2D();
             if (Dist < KINDA_SMALL_NUMBER) continue;
 
-            float MinDist = (AllRadii[i] + AllRadii[NIdx]) * 0.5f;
+            float MinDist = AllRadii[i] + AllRadii[NIdx];
             if (Dist >= MinDist) continue;
 
             // 重叠量平摊到双方，各推一半

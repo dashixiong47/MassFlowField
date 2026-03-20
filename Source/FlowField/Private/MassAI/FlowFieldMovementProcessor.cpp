@@ -150,22 +150,57 @@ void UFlowFieldMovementProcessor::Execute(
                         SafePos.Z       = Agent.bSurfaceInitialized ? Agent.SmoothedSurfaceZ : Pos.Z;
                         Transform.SetLocation(SafePos);
                     }
+                    Agent.CurrentDir = FVector::ZeroVector;
                     continue;
+                }
+
+                // ── 目标在障碍内：全局唯一停止点 + 贴墙检测 ──────────
+                FVector EffectiveGoal = CurrentGoal;
+                {
+                    const bool bGoalInObs = (FlowActor->GetIntegration(CurrentGoal) < 0.f);
+                    if (bGoalInObs)
+                    {
+                        FIntPoint NC = FlowActor->FindNearestWalkable(CurrentGoal);
+                        if (NC.X >= 0)
+                            EffectiveGoal = FlowActor->GetCellCenter(NC);
+
+                        // 朝目标方向试探一格，进障碍说明已到最近可走位置
+                        FVector ToGoal2D = (CurrentGoal - Pos).GetSafeNormal2D();
+                        if (!ToGoal2D.IsNearlyZero())
+                        {
+                            FVector TestPos = Pos + ToGoal2D * FlowActor->CellSize;
+                            TestPos.Z = Pos.Z;
+                            if (FlowActor->GetIntegration(TestPos) < 0.f)
+                            {
+                                // 已贴墙到位：停下来朝目标转身，不再晃动
+                                Agent.CurrentDir = FVector::ZeroVector;
+                                FRotator FaceRot = FMath::RInterpTo(
+                                    Transform.GetRotation().Rotator(),
+                                    ToGoal2D.ToOrientationRotator(), DeltaTime, 5.f);
+                                Transform.SetRotation(FaceRot.Quaternion());
+                                continue;
+                            }
+                        }
+                    }
                 }
 
                 // ── 流场方向 ─────────────────────────────────────────
                 FVector DesiredDir = FlowActor->GetFlowDirectionSmooth(Pos);
                 if (DesiredDir.IsNearlyZero())
                 {
-                    FVector ToGoal = (CurrentGoal - Pos).GetSafeNormal2D();
+                    FVector ToGoal = (EffectiveGoal - Pos).GetSafeNormal2D();
                     if (ToGoal.IsNearlyZero()) continue;
                     DesiredDir = ToGoal;
                 }
 
                 // ── 叠加 Boids 分离力 ─────────────────────────────────
+                // SeparationForce 是位移量，必须先归一化再加权，否则量纲不对会拉歪方向
                 FVector BlendedDir = DesiredDir;
                 if (!Boid.SeparationForce.IsNearlyZero())
-                    BlendedDir += Boid.SeparationForce * Boid.SeparationWeight;
+                {
+                    FVector SepDir = Boid.SeparationForce.GetSafeNormal2D();
+                    BlendedDir += SepDir * Boid.SeparationWeight;
+                }
 
                 BlendedDir.Z = 0.f;
                 if (BlendedDir.IsNearlyZero()) continue;
