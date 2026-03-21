@@ -67,7 +67,9 @@ public class FlowField : ModuleRules
 					"EditorStyle",
 					"Slate",
 					"SlateCore",
-					"Projects"
+					"Projects",
+					"AssetTools",
+					"ContentBrowser"
 				}
 			);
 		}

@@ -7,6 +7,7 @@
 #include "MassAI/FlowFieldAgentFragment.h"
 #include "MassReplicationSubsystem.h"
 #include "MassReplication/FlowFieldAgentReplicator.h"
+#include "VAT/FlowFieldVATDataAsset.h"
 #include "FlowFieldAgentTrait.generated.h"
 
 UCLASS(meta = (DisplayName = "FlowField 智能体"))
@@ -49,6 +50,65 @@ public:
     UPROPERTY(EditAnywhere, Category="FlowField|地面贴合",
         meta=(ClampMin="0.1", DisplayName="高度平滑速度"))
     float SurfaceZSmoothSpeed = 10.f;
+
+    // ── VAT 渲染 ──────────────────────────────────────────────────
+
+    /**
+     * 启用 VAT（顶点动画纹理）渲染模式。
+     * 开启后实体使用 UMassRepresentationSubsystem 管理 HISM 实例，
+     * 支持 LOD 剔除与多网格切换。请从 Mass 配置中移除 MassVisualizationTrait。
+     */
+    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
+        meta=(DisplayName="启用 VAT 渲染"))
+    bool bUseVATRendering = false;
+
+    /** VAT 数据资产（仅 bUseVATRendering=true 时生效） */
+    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
+        meta=(EditCondition="bUseVATRendering", DisplayName="VAT 数据资产"))
+    TSoftObjectPtr<UFlowFieldVATDataAsset> VATDataAsset;
+
+    /**
+     * 启用远景低精度网格体。
+     * 开启后超过切换距离的实体改用简单网格体渲染，节省 VAT 着色器开销。
+     */
+    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
+        meta=(EditCondition="bUseVATRendering", DisplayName="启用远景 LOD 网格"))
+    bool bUseLODMesh = false;
+
+    /**
+     * 远景低精度网格体。
+     * 超过切换距离后替代 VAT 网格，材质通常比 VAT 材质便宜得多。
+     */
+    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
+        meta=(EditCondition="bUseVATRendering && bUseLODMesh", DisplayName="远景 LOD 网格体"))
+    TObjectPtr<UStaticMesh> LODMesh;
+
+    /** 远景 LOD 网格体材质（不填使用网格体默认材质） */
+    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
+        meta=(EditCondition="bUseVATRendering && bUseLODMesh", DisplayName="远景 LOD 材质"))
+    TObjectPtr<UMaterialInterface> LODMeshMaterial;
+
+    /**
+     * VAT → LOD 网格切换距离（cm）。
+     * 超过此距离后切换到低精度网格。
+     */
+    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
+        meta=(ClampMin="0", EditCondition="bUseVATRendering && bUseLODMesh", DisplayName="LOD 切换距离（cm）"))
+    float LODSwitchDistance = 5000.f;
+
+    /**
+     * 启用距离剔除。
+     * 开启后超过剔除距离的实体会从 ISM 中移除，不占 GPU 资源。
+     * 关闭时所有实体始终渲染（适合小规模调试）。
+     */
+    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
+        meta=(EditCondition="bUseVATRendering", DisplayName="启用距离剔除"))
+    bool bEnableDistanceCulling = true;
+
+    /** 剔除距离（cm）。超出此距离的实体不渲染，从 ISM 中移除。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
+        meta=(ClampMin="100", EditCondition="bUseVATRendering && bEnableDistanceCulling", DisplayName="剔除距离（cm）"))
+    float CullDistance = 10000.f;
 
     virtual void BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const override;
 };

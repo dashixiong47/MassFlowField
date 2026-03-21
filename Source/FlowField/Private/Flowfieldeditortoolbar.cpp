@@ -4,10 +4,18 @@
 
 #include "FlowFieldSubsystem.h"
 #include "FlowFieldActor.h"
+#include "VAT/FlowFieldVATDataAsset.h"
 #include "ToolMenus.h"
 #include "Editor.h"
 #include "EngineUtils.h"
 #include "FlowFieldStyle.h"
+#include "AssetToolsModule.h"
+#include "Factories/DataAssetFactory.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "ContentBrowserModule.h"
+#include "IContentBrowserSingleton.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 
 #define LOCTEXT_NAMESPACE "FlowField"
 
@@ -59,6 +67,11 @@ void FFlowFieldEditorToolbar::Register()
 			this, &FFlowFieldEditorToolbar::RegisterMenuExtensions
 		)
 	);
+
+	// 地图打开后检测碰撞配置（此时主窗口已完全渲染，通知一定可见）
+	FEditorDelegates::OnMapOpened.AddRaw(
+		this, &FFlowFieldEditorToolbar::OnMapOpenedForCollisionCheck
+	);
 }
 
 void FFlowFieldEditorToolbar::RegisterMenuExtensions()
@@ -87,6 +100,8 @@ void FFlowFieldEditorToolbar::RegisterMenuExtensions()
 void FFlowFieldEditorToolbar::Unregister()
 {
 	CancelScanNotification();
+
+	FEditorDelegates::OnMapOpened.RemoveAll(this);
 
 	UToolMenus::UnRegisterStartupCallback(this);
 	UToolMenus::Get()->UnregisterOwner(this);
@@ -118,17 +133,16 @@ TSharedRef<SWidget> FFlowFieldEditorToolbar::GenerateMenuContent()
 		FSlateIcon(FFlowFieldStyle::GetStyleSetName(), "FlowField.Clear"),
 		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnClearObstacles))
 	);
-	// ✅ 以后扩展直接加这里
-	/*
+
 	MenuBuilder.AddMenuSeparator();
 
+	// ✅ 创建 VAT DataAsset
 	MenuBuilder.AddMenuEntry(
-		INVTEXT("Debug Draw"),
-		INVTEXT("Toggle debug draw"),
-		FSlateIcon(),
-		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnDebugDraw))
+		INVTEXT("Create VAT DataAsset"),
+		INVTEXT("在内容浏览器中创建 FlowFieldVATDataAsset"),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.DataAsset"),
+		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnCreateVATDataAsset))
 	);
-	*/
 
 	return MenuBuilder.MakeWidget();
 }
@@ -280,6 +294,185 @@ void FFlowFieldEditorToolbar::CancelScanNotification()
 				Sub->ClearObstacleActors();
 			}
 		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 碰撞配置检测 & 修复
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 地图打开后触发一次检测，之后自动解绑，避免每次换图都弹 */
+void FFlowFieldEditorToolbar::OnMapOpenedForCollisionCheck(const FString& /*Filename*/, bool /*bAsTemplate*/)
+{
+	FEditorDelegates::OnMapOpened.RemoveAll(this);
+	CheckAndNotifyCollisionConfig();
+}
+
+/** 读项目 DefaultEngine.ini，检查是否已配置 Terrain 碰撞通道 + FlowFieldTerrain 预设 */
+bool FFlowFieldEditorToolbar::HasTerrainChannel() const
+{
+	FString Content;
+	const FString IniPath = FPaths::ProjectConfigDir() / TEXT("DefaultEngine.ini");
+	if (!FFileHelper::LoadFileToString(Content, *IniPath))
+	{
+		return false;
+	}
+	// 需要通道和预设都存在
+	const bool bHasChannel = Content.Contains(TEXT("Name=\"Terrain\"")) || Content.Contains(TEXT("Name=Terrain"));
+	const bool bHasPreset  = Content.Contains(TEXT("FlowFieldTerrain"));
+	return bHasChannel && bHasPreset;
+}
+
+void FFlowFieldEditorToolbar::CheckAndNotifyCollisionConfig()
+{
+	if (HasTerrainChannel()) return;
+
+	// 隐藏旧通知（如果有）
+	if (auto Pin = CollisionConfigNotification.Pin())
+	{
+		Pin->SetCompletionState(SNotificationItem::CS_None);
+		Pin->ExpireAndFadeout();
+	}
+
+	FNotificationInfo Info(INVTEXT("FlowField：未检测到碰撞配置（Terrain 通道 + FlowFieldTerrain 预设）"));
+	Info.bFireAndForget  = false;
+	Info.ExpireDuration  = 0.f;
+	Info.bUseLargeFont   = false;
+	Info.Image           = FAppStyle::GetBrush("Icons.WarningWithColor");
+
+	Info.ButtonDetails.Add(FNotificationButtonInfo(
+		INVTEXT("一键修复碰撞配置"),
+		INVTEXT("写入 Terrain Object 通道 + FlowFieldTerrain 预设，需重启编辑器生效"),
+		FSimpleDelegate::CreateRaw(this, &FFlowFieldEditorToolbar::OnFixCollisionConfig)
+	));
+
+	Info.ButtonDetails.Add(FNotificationButtonInfo(
+		INVTEXT("忽略"),
+		FText(),
+		FSimpleDelegate::CreateLambda([this]()
+		{
+			if (auto Pin = CollisionConfigNotification.Pin())
+			{
+				Pin->SetCompletionState(SNotificationItem::CS_None);
+				Pin->ExpireAndFadeout();
+			}
+		})
+	));
+
+	CollisionConfigNotification = FSlateNotificationManager::Get().AddNotification(Info);
+	if (auto Pin = CollisionConfigNotification.Pin())
+	{
+		Pin->SetCompletionState(SNotificationItem::CS_Pending);
+	}
+}
+
+void FFlowFieldEditorToolbar::OnFixCollisionConfig()
+{
+	const FString IniPath = FPaths::ProjectConfigDir() / TEXT("DefaultEngine.ini");
+
+	FString Content;
+	FFileHelper::LoadFileToString(Content, *IniPath);
+
+	// 幂等检查：通道和预设都已存在则跳过
+	const bool bHasChannel = Content.Contains(TEXT("Name=\"Terrain\"")) || Content.Contains(TEXT("Name=Terrain"));
+	const bool bHasPreset  = Content.Contains(TEXT("FlowFieldTerrain"));
+	if (bHasChannel && bHasPreset)
+	{
+		if (auto Pin = CollisionConfigNotification.Pin()) Pin->ExpireAndFadeout();
+		return;
+	}
+
+	// 要写入的行（只写缺失的部分）
+	static const FString ChannelLine =
+		TEXT("+DefaultChannelResponses=(Channel=ECC_GameTraceChannel1,DefaultResponse=ECR_Block,bTraceType=False,bStaticObject=True,Name=\"Terrain\")\n");
+
+	static const FString PresetLine =
+		TEXT("+Profiles=(Name=\"FlowFieldTerrain\",CollisionEnabled=QueryAndPhysics,bCanModify=True,ObjectTypeName=\"Terrain\",")
+		TEXT("CustomResponses=((Channel=\"Visibility\",Response=ECR_Block),(Channel=\"Camera\",Response=ECR_Block),")
+		TEXT("(Channel=\"WorldStatic\",Response=ECR_Block),(Channel=\"WorldDynamic\",Response=ECR_Block),")
+		TEXT("(Channel=\"Pawn\",Response=ECR_Block),(Channel=\"PhysicsBody\",Response=ECR_Block),")
+		TEXT("(Channel=\"Vehicle\",Response=ECR_Block),(Channel=\"Destructible\",Response=ECR_Block)),")
+		TEXT("HelpMessage=\"FlowField 地形专用 - 阻挡所有通道\")\n");
+
+	FString NewLines;
+	if (!bHasChannel) NewLines += ChannelLine;
+	if (!bHasPreset)  NewLines += PresetLine;
+
+	const FString Section = TEXT("[/Script/Engine.CollisionProfile]");
+	int32 SectionIdx = Content.Find(Section, ESearchCase::CaseSensitive);
+	if (SectionIdx != INDEX_NONE)
+	{
+		// 在 section header 后换行处插入
+		int32 InsertIdx = SectionIdx + Section.Len();
+		// 跳过换行符
+		while (InsertIdx < Content.Len() && (Content[InsertIdx] == TEXT('\r') || Content[InsertIdx] == TEXT('\n')))
+		{
+			++InsertIdx;
+		}
+		Content.InsertAt(InsertIdx, NewLines);
+	}
+	else
+	{
+		// 没有该 section，追加
+		Content += TEXT("\n") + Section + TEXT("\n") + NewLines;
+	}
+
+	if (FFileHelper::SaveStringToFile(Content, *IniPath))
+	{
+		if (auto Pin = CollisionConfigNotification.Pin())
+		{
+			Pin->SetText(INVTEXT("Terrain 通道 + FlowFieldTerrain 预设已写入，请重启编辑器生效"));
+			Pin->SetCompletionState(SNotificationItem::CS_Success);
+			Pin->ExpireAndFadeout();
+		}
+	}
+	else
+	{
+		if (auto Pin = CollisionConfigNotification.Pin())
+		{
+			Pin->SetText(INVTEXT("写入失败，请手动编辑 DefaultEngine.ini"));
+			Pin->SetCompletionState(SNotificationItem::CS_Fail);
+			Pin->ExpireAndFadeout();
+		}
+	}
+}
+
+void FFlowFieldEditorToolbar::OnCreateVATDataAsset()
+{
+	// ── 获取内容浏览器当前选中目录，未选则放 /Game ─────────────
+	FContentBrowserModule& CBModule =
+		FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
+
+	TArray<FString> SelectedPaths;
+	CBModule.Get().GetSelectedPathViewFolders(SelectedPaths);
+	const FString PackagePath = SelectedPaths.Num() > 0 ? SelectedPaths[0] : TEXT("/Game");
+
+	// ── 生成唯一资产名，避免同名冲突 ─────────────────────────
+	IAssetTools& AssetTools =
+		FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+
+	FString AssetName, PackageName;
+	AssetTools.CreateUniqueAssetName(
+		PackagePath / TEXT("VATDataAsset"), TEXT(""), PackageName, AssetName
+	);
+
+	// ── 直接创建，不弹 class 选择面板 ────────────────────────
+	UDataAssetFactory* Factory = NewObject<UDataAssetFactory>();
+	Factory->DataAssetClass = UFlowFieldVATDataAsset::StaticClass();
+
+	UObject* NewAsset = AssetTools.CreateAsset(
+		AssetName, PackagePath,
+		UFlowFieldVATDataAsset::StaticClass(), Factory
+	);
+
+	if (NewAsset)
+	{
+		// 内容浏览器定位到新资产
+		TArray<UObject*> Assets = { NewAsset };
+		GEditor->SyncBrowserToObjects(Assets);
+
+		// 打开详情编辑器
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewAsset);
 	}
 }
 

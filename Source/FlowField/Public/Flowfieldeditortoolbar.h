@@ -44,6 +44,13 @@ private:
 	// 功能
 	void OnScanObstacles();
 	void OnClearObstacles();
+	void OnCreateVATDataAsset();
+
+	// 碰撞配置检测 & 修复
+	void OnMapOpenedForCollisionCheck(const FString& Filename, bool bAsTemplate);
+	void CheckAndNotifyCollisionConfig();
+	void OnFixCollisionConfig();
+	bool HasTerrainChannel() const;
 
 	// 通知
 	void ShowScanNotification(int32 Total);
@@ -54,6 +61,7 @@ private:
 private:
 	TSharedPtr<FUICommandList>  CommandList;
 	TWeakPtr<SNotificationItem> ScanNotification;
+	TWeakPtr<SNotificationItem> CollisionConfigNotification;
 };
 
 #endif // WITH_EDITOR

@@ -9,6 +9,8 @@
 #include "FlowFieldActor.generated.h"
 
 class UFlowFieldObstacleComponent;
+class UFlowFieldVATDataAsset;
+class UInstancedStaticMeshComponent;
 
 // 被追踪目标信息（由 UpdateTarget 定时缓存，供各 Processor 读取）
 struct FFlowFieldTrackedTarget
@@ -54,6 +56,16 @@ public:
         meta=(ClampMin="0", DisplayName="最大台阶高度（cm）"))
     float MaxStepHeight = 45.f;
 
+    /**
+     * 扫描模式：
+     * - TopDown：原始行为，单次射线取第一个命中，速度快但遇到屋顶/顶棚会遮挡下方楼梯。
+     * - GroundLevel：穿透整列取所有法线朝上的命中面，选取 Z 最低的可走面，
+     *   适用于楼梯、走廊等上方有遮挡物的场景。
+     */
+    UPROPERTY(EditAnywhere, Category="FlowField",
+        meta=(DisplayName="扫描模式"))
+    EFlowFieldScanMode ScanMode = EFlowFieldScanMode::TopDown;
+
     // ── 调试绘制 ──────────────────────────────────────────────────
 
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
@@ -62,7 +74,7 @@ public:
 
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
         meta=(DisplayName="绘制流场方向"))
-    bool bDrawFlow = false;
+    bool bDrawFlow = true;
 
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
         meta=(DisplayName="绘制热力图"))
@@ -123,6 +135,11 @@ public:
     UPROPERTY()
     TArray<FVector> SavedNormals;
 
+    // 扫描烘焙的静态障碍 mask（0=可走, 1=障碍）
+    // 序列化到 .umap，引擎重启后无需重新扫描
+    UPROPERTY()
+    TArray<uint8> BakedObstacleMask;
+
     UPROPERTY(VisibleAnywhere, Category="FlowField|状态")
     int32 SavedGridWidth = 0;
 
@@ -152,6 +169,12 @@ public:
     void ClearDebug();
 
     bool ResolveBounds(FVector& OutMin, FVector& OutMax) const;
+
+    // 由 FlowFieldSubsystem::FinalizeScan 调用，将扫描障碍直接烘焙进网格
+    void BakeObstaclesFromScan(int32 W, int32 H, const TArray<FIntPoint>& ObstacleCells);
+
+    // 清除烘焙数据，并重建当前网格（编辑器 Clear 调用）
+    void ClearBakedObstacles();
     FIntPoint WorldToCell(FVector WorldPos) const { return Grid.WorldToCell(WorldPos); }
 
     // 依赖 bReady，流场算完才能用
@@ -258,4 +281,20 @@ private:
 
     // 障碍物注册列表
     TArray<TWeakObjectPtr<UFlowFieldObstacleComponent>> RegisteredObstacles;
+
+    // ── VAT 渲染 ISM 管理 ─────────────────────────────────────────
+public:
+    /**
+     * 根据 DataAsset 获取（或创建）对应的 ISM 组件。
+     * 使用 ISM（非 HISM）— 每帧更新 transform 时无 BVH 重建开销。
+     * 由 UFlowFieldVATProcessor 在游戏线程调用。
+     */
+    UInstancedStaticMeshComponent* GetOrCreateVATRenderer(
+        UFlowFieldVATDataAsset* DataAsset);
+
+private:
+    /** DataAsset → ISM 映射，每种怪物类型对应一个 ISM */
+    UPROPERTY()
+    TMap<TObjectPtr<UFlowFieldVATDataAsset>,
+         TObjectPtr<UInstancedStaticMeshComponent>> VATRenderers;
 };

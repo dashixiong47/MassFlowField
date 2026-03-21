@@ -8,6 +8,8 @@
 #include "Engine/LevelBounds.h"
 #include "EngineUtils.h"
 #include "Net/UnrealNetwork.h"
+#include "VAT/FlowFieldVATDataAsset.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #if WITH_EDITOR
 #include "Editor.h"
 #include "EditorViewportClient.h"
@@ -81,6 +83,16 @@ void AFlowFieldActor::OnConstruction(const FTransform& Transform)
 
     FFlowFieldGrid EditorGrid;
     EditorGrid.Init(Min, W, H, CellSize);
+
+    // 应用烘焙障碍（编辑器可见）
+    if (BakedObstacleMask.Num() == W * H)
+    {
+        for (int32 Y = 0; Y < H; ++Y)
+            for (int32 X = 0; X < W; ++X)
+                if (BakedObstacleMask[Y * W + X])
+                    EditorGrid.GetCell(X, Y).Cost = 255;
+    }
+
     ApplyObstaclesToGrid(EditorGrid);
 
     bReady = false;
@@ -190,6 +202,15 @@ void AFlowFieldActor::GenerateInternal(FVector GoalPos)
                 Cell.SurfaceZ = SavedSurfaceZ[Y * W + X];
                 Cell.Normal   = SavedNormals[Y * W + X];
             }
+    }
+
+    // 应用烘焙的静态障碍（扫描结果，序列化保存，无需重新扫描）
+    if (BakedObstacleMask.Num() == W * H)
+    {
+        for (int32 Y = 0; Y < H; ++Y)
+            for (int32 X = 0; X < W; ++X)
+                if (BakedObstacleMask[Y * W + X])
+                    NewGrid.GetCell(X, Y).Cost = 255;
     }
 
     ApplyObstaclesToGrid(NewGrid);
@@ -486,11 +507,14 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
 
         const float WX = Grid.Origin.X + VX * Grid.CellSize;
         const float WY = Grid.Origin.Y + VY * Grid.CellSize;
+        FCollisionObjectQueryParams ObjQuery;
+        ObjQuery.AddObjectTypesToQuery(ECC_WorldStatic);
+        ObjQuery.AddObjectTypesToQuery(ECC_GameTraceChannel1); // Terrain
         FHitResult Hit;
         if (World->LineTraceSingleByObjectType(Hit,
                 FVector(WX, WY, 100000.f),
                 FVector(WX, WY, -100000.f),
-                FCollisionObjectQueryParams(ECC_WorldStatic)))
+                ObjQuery))
         {
             CachedDebugZ[VI] = Hit.ImpactPoint.Z;
         }
@@ -558,28 +582,55 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
                 Lines.Add({BL, TL, Col, Thick});
             }
 
-            // ── 流场箭头 ──────────────────────────────────────────────
-            if (bDrawFlow && !Cell.FlowDir.IsZero() && !bBlocked)
+            // ── 流场箭头 / 无流场圆圈 ────────────────────────────────
+            if (bDrawFlow && !bBlocked)
             {
-                FVector Dir = FVector(Cell.FlowDir.X, Cell.FlowDir.Y, 0.f).GetSafeNormal();
-                const float Len  = Grid.CellSize * ArrowScale;
-                const float TipX = CX + Dir.X * Len;
-                const float TipY = CY + Dir.Y * Len;
-
-                // 箭头终点 Z：取目标格子四个角的均值
-                float TipZ = ZC;
-                FIntPoint TC = Grid.WorldToCell(FVector(TipX, TipY, 0.f));
-                if (Grid.IsInBounds(TC))
+                if (!Cell.FlowDir.IsZero())
                 {
-                    TipZ = (GetVertexZ(TC.X,   TC.Y  ) + GetVertexZ(TC.X+1, TC.Y  ) +
-                            GetVertexZ(TC.X,   TC.Y+1) + GetVertexZ(TC.X+1, TC.Y+1))
-                           * 0.25f + ZOff;
-                }
+                    // ── 有方向：画箭头 ──────────────────────────────────
+                    FVector Dir = FVector(Cell.FlowDir.X, Cell.FlowDir.Y, 0.f).GetSafeNormal();
+                    const float Len  = Grid.CellSize * ArrowScale;
+                    const float TipX = CX + Dir.X * Len;
+                    const float TipY = CY + Dir.Y * Len;
 
-                const FVector Tip(TipX, TipY, TipZ);
-                Lines.Add({Center, Tip, DebugColorArrow, 1.5f});
-                Lines.Add({Tip, Tip + Dir.RotateAngleAxis( 145.f, FVector::UpVector) * Len * 0.3f, DebugColorArrow, 1.f});
-                Lines.Add({Tip, Tip + Dir.RotateAngleAxis(-145.f, FVector::UpVector) * Len * 0.3f, DebugColorArrow, 1.f});
+                    // 箭头终点 Z：取目标格子四个角的均值
+                    float TipZ = ZC;
+                    FIntPoint TC = Grid.WorldToCell(FVector(TipX, TipY, 0.f));
+                    if (Grid.IsInBounds(TC))
+                    {
+                        TipZ = (GetVertexZ(TC.X,   TC.Y  ) + GetVertexZ(TC.X+1, TC.Y  ) +
+                                GetVertexZ(TC.X,   TC.Y+1) + GetVertexZ(TC.X+1, TC.Y+1))
+                               * 0.25f + ZOff;
+                    }
+
+                    const FVector Tip(TipX, TipY, TipZ);
+
+                    // 翼片：沿地形法线方向旋转，贴合斜面
+                    const FVector SlopeNormal = FVector(
+                        (ZTL + ZBL - ZTR - ZBR) / (2.f * Grid.CellSize),
+                        (ZTL + ZTR - ZBL - ZBR) / (2.f * Grid.CellSize),
+                        1.f).GetSafeNormal();
+                    Lines.Add({Center, Tip, DebugColorArrow, 1.5f});
+                    Lines.Add({Tip, Tip + Dir.RotateAngleAxis( 145.f, SlopeNormal) * Len * 0.3f, DebugColorArrow, 1.f});
+                    Lines.Add({Tip, Tip + Dir.RotateAngleAxis(-145.f, SlopeNormal) * Len * 0.3f, DebugColorArrow, 1.f});
+                }
+                else
+                {
+                    // ── 无方向：画小圆圈（贴合地形）──────────────────────
+                    const float R    = Grid.CellSize * ArrowScale * 0.35f;
+                    const int32 Segs = 8;
+                    for (int32 i = 0; i < Segs; ++i)
+                    {
+                        const float A0 = (float)i       / Segs * 2.f * PI;
+                        const float A1 = (float)(i + 1) / Segs * 2.f * PI;
+                        // 每段端点在格心 Z 处（已由 GetVertexZ 贴地）
+                        Lines.Add({
+                            FVector(CX + FMath::Cos(A0) * R, CY + FMath::Sin(A0) * R, ZC),
+                            FVector(CX + FMath::Cos(A1) * R, CY + FMath::Sin(A1) * R, ZC),
+                            DebugColorNoFlow, 0.8f
+                        });
+                    }
+                }
             }
         }
     }
@@ -689,4 +740,79 @@ void AFlowFieldActor::UnregisterObstacle(UFlowFieldObstacleComponent* Comp)
     RegisteredObstacles.RemoveSwap(Comp);
     // 障碍销毁时只重建流场（地表数据保留），触发精确格子更新
     if (bReady) RebuildFlowAfterObstacleChange();
+}
+
+// ── VAT 渲染 ──────────────────────────────────────────────────────
+
+UInstancedStaticMeshComponent* AFlowFieldActor::GetOrCreateVATRenderer(
+    UFlowFieldVATDataAsset* DataAsset)
+{
+    if (!DataAsset || !DataAsset->Mesh)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[VAT] GetOrCreateVATRenderer failed: DataAsset=%s Mesh=%s"),
+            DataAsset ? *DataAsset->GetName() : TEXT("NULL"),
+            (DataAsset && !DataAsset->Mesh) ? TEXT("NULL") : TEXT("OK"));
+        return nullptr;
+    }
+
+    if (TObjectPtr<UInstancedStaticMeshComponent>* Found = VATRenderers.Find(DataAsset))
+    {
+        return Found->Get();
+    }
+
+    // 使用 ISM（非 HISM）：每帧更新 transform 不触发 BVH 重建
+    UInstancedStaticMeshComponent* ISM =
+        NewObject<UInstancedStaticMeshComponent>(this, NAME_None, RF_Transient);
+    ISM->SetStaticMesh(DataAsset->Mesh);
+    if (DataAsset->Material)
+    {
+        ISM->SetMaterial(0, DataAsset->Material);
+    }
+    ISM->NumCustomDataFloats = DataAsset->NumCustomDataFloats;
+    // 动态实例必须 Movable，否则运行时更新 transform 无效
+    ISM->SetMobility(EComponentMobility::Movable);
+    ISM->SetHiddenInGame(false);
+    ISM->SetVisibility(true);
+    // RF_Transient：让 UpdateInstanceTransform 内部的 Modify() 在 PIE 中变成 no-op，
+    //              否则每帧 N 次写 undo history，是最大性能杀手
+    // SetCanEverAffectNavigation(false)：禁止导航更新，否则每实体每帧触发 PartialNavigationUpdates
+    ISM->SetCanEverAffectNavigation(false);
+    ISM->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    ISM->SetupAttachment(GetRootComponent());
+    ISM->RegisterComponent();
+
+    VATRenderers.Add(DataAsset, ISM);
+    return ISM;
+}
+
+// ── 扫描烘焙 ──────────────────────────────────────────────────────
+
+void AFlowFieldActor::BakeObstaclesFromScan(int32 W, int32 H, const TArray<FIntPoint>& ObstacleCells)
+{
+    BakedObstacleMask.Init(0, W * H);
+    for (const FIntPoint& P : ObstacleCells)
+    {
+        if (P.X >= 0 && P.X < W && P.Y >= 0 && P.Y < H)
+            BakedObstacleMask[P.Y * W + P.X] = 1;
+    }
+
+    // 立即写入当前运行时 Grid（不等下次 Generate）
+    for (const FIntPoint& P : ObstacleCells)
+    {
+        if (FFlowFieldCell* C = Grid.TryGetCell(P.X, P.Y))
+            C->Cost = 255;
+    }
+
+    Grid.ComputeBorderCells();
+    bDebugDirty = true;
+
+    // 如果流场已生成，障碍变化后重算积分场+流向（否则下次 Generate 时自动包含）
+    RebuildFlowAfterObstacleChange();
+}
+
+void AFlowFieldActor::ClearBakedObstacles()
+{
+    BakedObstacleMask.Empty();
+    // 重建编辑器网格（清除烘焙格子的 Cost=255）
+    RefreshEditorObstacleLayout();
 }

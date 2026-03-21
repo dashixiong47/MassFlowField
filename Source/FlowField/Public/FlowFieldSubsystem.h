@@ -22,17 +22,20 @@ struct FScanState
     TSharedPtr<TArray<FTraceDelegate>> DelegatesPtr;
     TSharedPtr<FThreadSafeCounter>     PendingCount;
 
-    FVector Min       = FVector::ZeroVector;
-    int32   W         = 0;
-    int32   H         = 0;
-    float   CellSize  = 0.f;
-    float   Half      = 0.f;
-    float   MaxStepH  = 0.f;
-    int32   SubmitIdx = 0;
-    int32   Total     = 0;
+    FVector Min                 = FVector::ZeroVector;
+    float   MaxZ                = 0.f;   // BoundsBox 顶面 Z，GroundLevel 模式用于裁掉超出范围的命中
+    int32   W                   = 0;
+    int32   H                   = 0;
+    float   CellSize            = 0.f;
+    float   Half                = 0.f;
+    float   MaxStepH            = 0.f;
+    int32   SubmitIdx           = 0;
+    int32   Total               = 0;
 
-    TSharedPtr<TArray<TPair<FIntPoint, FVector>>> SpawnList;
-    int32 SpawnIdx    = 0;
+    // GroundLevel 模式
+    bool    bGroundLevelScan    = false;
+    float   WalkableThreshold   = 0.707f;  // cos(45°)
+
     bool  bSubmitDone = false;
 };
 
@@ -121,5 +124,4 @@ private:
 
     void SubmitNextBatch();
     void FinalizeScan();
-    void SpawnNextBatch();
 };

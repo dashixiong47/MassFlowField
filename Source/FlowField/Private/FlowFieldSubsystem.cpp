@@ -73,16 +73,8 @@ void UFlowFieldSubsystem::Tick(float DeltaTime)
 {
 	if (!ScanState.IsValid()) return;
 
-	FScanState& S = *ScanState;
-
-	if (!S.bSubmitDone)
-	{
+	if (!ScanState->bSubmitDone)
 		SubmitNextBatch();
-		return;
-	}
-
-	if (S.SpawnList.IsValid() && S.SpawnIdx < S.SpawnList->Num())
-		SpawnNextBatch();
 }
 
 // ── Query ─────────────────────────────────────────────────────────
@@ -307,7 +299,8 @@ void UFlowFieldSubsystem::ScanAndPlaceObstacles(int32 BatchSize)
 	ScanState->DelegatesPtr = MakeShared<TArray<FTraceDelegate>>();
 	ScanState->DelegatesPtr->SetNum(Total);
 	ScanState->PendingCount = MakeShared<FThreadSafeCounter>(Total);
-	ScanState->Min = Min;
+	ScanState->Min  = Min;
+	ScanState->MaxZ = Max.Z;
 	ScanState->W = W;
 	ScanState->H = H;
 	ScanState->CellSize = CellSize;
@@ -315,8 +308,11 @@ void UFlowFieldSubsystem::ScanAndPlaceObstacles(int32 BatchSize)
 	ScanState->MaxStepH = FlowFieldActor->MaxStepHeight;
 	ScanState->Total = Total;
 	ScanState->SubmitIdx = 0;
-	ScanState->SpawnIdx = 0;
 	ScanState->bSubmitDone = false;
+
+	ScanState->bGroundLevelScan  = (FlowFieldActor->ScanMode == EFlowFieldScanMode::GroundLevel);
+	ScanState->WalkableThreshold = FMath::Cos(FMath::DegreesToRadians(
+		FMath::Clamp(FlowFieldActor->MaxWalkSlope, 0.f, 89.f)));
 
 	ScanBatchSize = FMath::Clamp(BatchSize, 10, 2000);
 
@@ -343,6 +339,13 @@ void UFlowFieldSubsystem::SubmitNextBatch()
 	static const float RayLength = 10000.f;
 
 	TWeakObjectPtr<UFlowFieldSubsystem> WeakSelf(this);
+	const bool bGroundLevel         = S.bGroundLevelScan;
+	const float WalkableThreshold   = S.WalkableThreshold;
+	const float ScanMinZ            = S.Min.Z;
+	const float ScanMaxZ            = S.MaxZ;
+	const EAsyncTraceType TraceType = bGroundLevel
+		? EAsyncTraceType::Multi
+		: EAsyncTraceType::Single;
 
 	for (int32 Idx = S.SubmitIdx; Idx < BatchEnd; ++Idx)
 	{
@@ -361,14 +364,49 @@ void UFlowFieldSubsystem::SubmitNextBatch()
 				CellInfosPtr = S.CellInfosPtr,
 				PendingCount = S.PendingCount,
 				DelegatesPtr = S.DelegatesPtr,
+				bGroundLevel,
+				WalkableThreshold,
+				ScanMinZ,
+				ScanMaxZ,
 				Idx](const FTraceHandle&, FTraceDatum& Data)
 			{
 				FCellScanInfo& Info = (*CellInfosPtr)[Idx];
-				if (Data.OutHits.Num() > 0 && Data.OutHits[0].IsValidBlockingHit())
+
+				if (bGroundLevel)
 				{
-					Info.bHit = true;
-					Info.SurfaceZ = Data.OutHits[0].Location.Z;
-					Info.Normal = Data.OutHits[0].Normal;
+					// 穿透模式：
+					// 1. 只保留 Z 在 BoundsBox 范围内的命中（排除范围外的屋顶、地下室）
+					// 2. 过滤法线朝下的面（内表面、顶棚底面）
+					// 3. 取剩余命中中 Z 最低的可行走面
+					float LowestZ      = FLT_MAX;
+					FVector BestNormal = FVector::UpVector;
+					for (const FHitResult& Hit : Data.OutHits)
+					{
+						if (!Hit.IsValidBlockingHit()) continue;
+						if (Hit.Location.Z < ScanMinZ || Hit.Location.Z > ScanMaxZ) continue; // 超出本层范围
+						if (Hit.Normal.Z < WalkableThreshold) continue;                        // 非可行走面
+						if (Hit.Location.Z < LowestZ)
+						{
+							LowestZ    = Hit.Location.Z;
+							BestNormal = Hit.Normal;
+						}
+					}
+					if (LowestZ != FLT_MAX)
+					{
+						Info.bHit     = true;
+						Info.SurfaceZ = LowestZ;
+						Info.Normal   = BestNormal;
+					}
+				}
+				else
+				{
+					// TopDown 模式：原始行为，取第一个命中
+					if (Data.OutHits.Num() > 0 && Data.OutHits[0].IsValidBlockingHit())
+					{
+						Info.bHit     = true;
+						Info.SurfaceZ = Data.OutHits[0].Location.Z;
+						Info.Normal   = Data.OutHits[0].Normal;
+					}
 				}
 
 				if (PendingCount->Decrement() == 0)
@@ -378,10 +416,14 @@ void UFlowFieldSubsystem::SubmitNextBatch()
 				}
 			});
 
+		FCollisionObjectQueryParams ObjQuery;
+		// ObjQuery.AddObjectTypesToQuery(ECC_WorldStatic);
+		ObjQuery.AddObjectTypesToQuery(ECC_GameTraceChannel1); // Terrain
+
 		World->AsyncLineTraceByObjectType(
-			EAsyncTraceType::Single,
+			TraceType,
 			Start, End,
-			FCollisionObjectQueryParams(ECC_WorldStatic),
+			ObjQuery,
 			QueryParams,
 			&Delegate
 		);
@@ -424,38 +466,16 @@ void UFlowFieldSubsystem::FinalizeScan()
 		FlowFieldActor->SavedNormals[i] = CellInfos[i].Normal;
 	}
 
-	TSet<FIntPoint> AlreadyPlaced;
-	for (TActorIterator<AFlowFieldObstacleActor> It(World); It; ++It)
-		AlreadyPlaced.Add(FlowFieldActor->WorldToCell((*It)->GetActorLocation()));
-
 	static const FIntPoint Dirs4[] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
-	S.SpawnList = MakeShared<TArray<TPair<FIntPoint, FVector>>>();
-
+	TArray<FIntPoint> ObstacleCells;
 	for (int32 Y = 0; Y < H; ++Y)
 	{
 		for (int32 X = 0; X < W; ++X)
 		{
-			FIntPoint Cell(X, Y);
-			if (AlreadyPlaced.Contains(Cell)) continue;
-
 			const FCellScanInfo& Info = CellInfos[Y * W + X];
-			FVector Center(
-				S.Min.X + X * S.CellSize + S.Half,
-				S.Min.Y + Y * S.CellSize + S.Half,
-				Info.bHit ? Info.SurfaceZ : S.Min.Z
-			);
+			if (!Info.bHit) continue;
 
-			if (!Info.bHit)
-			{
-				DrawDebugLine(World,
-				              FVector(Center.X, Center.Y, S.Min.Z + 5000.f),
-				              FVector(Center.X, Center.Y, S.Min.Z - 5000.f),
-				              FColor::Yellow, true, 30.f, 0, 1.f);
-				continue;
-			}
-
-			bool bIsObstacle = false;
 			for (const FIntPoint& D : Dirs4)
 			{
 				int32 NX = X + D.X, NY = Y + D.Y;
@@ -464,79 +484,25 @@ void UFlowFieldSubsystem::FinalizeScan()
 				if (!N.bHit) continue;
 				if (FMath::Abs(Info.SurfaceZ - N.SurfaceZ) > S.MaxStepH)
 				{
-					bIsObstacle = true;
+					ObstacleCells.Add({X, Y});
 					break;
 				}
 			}
-
-			// FColor Col = bIsObstacle ? FColor::Red : FColor::Green;
-			// DrawDebugLine(World,
-			//               FVector(Center.X, Center.Y, S.Min.Z + 5000.f),
-			//               FVector(Center.X, Center.Y, Info.SurfaceZ),
-			//               Col, true, 30.f, 0, 1.f);
-			// DrawDebugPoint(World,
-			//                FVector(Center.X, Center.Y, Info.SurfaceZ),
-			//                6.f, Col, true, 30.f);
-
-			if (bIsObstacle)
-				S.SpawnList->Add({Cell, FVector(Center.X, Center.Y, Info.SurfaceZ)});
 		}
 	}
 
-	S.SpawnIdx = 0;
-	UE_LOG(LogTemp, Log, TEXT("[FlowFieldSubsystem] FinalizeScan: %d obstacles to spawn"),
-	       S.SpawnList->Num());
-}
+	// 直接烘焙进网格，不 Spawn Actor
+	FlowFieldActor->BakeObstaclesFromScan(W, H, ObstacleCells);
 
-// ── SpawnNextBatch ────────────────────────────────────────────────
+	const int32 Placed = ObstacleCells.Num();
+	UE_LOG(LogTemp, Log, TEXT("[FlowFieldSubsystem] FinalizeScan: %d obstacle cells baked"), Placed);
 
-void UFlowFieldSubsystem::SpawnNextBatch()
-{
-	if (!ScanState.IsValid() || !ScanState->SpawnList.IsValid()) return;
+	if (OnScanCompleted.IsBound())
+		OnScanCompleted.Execute(Placed);
 
-	UWorld* World = GetWorld();
-	if (!World) return;
-
-	FScanState& S = *ScanState;
-	int32 BatchEnd = FMath::Min(S.SpawnIdx + 50, S.SpawnList->Num());
-
-	for (int32 i = S.SpawnIdx; i < BatchEnd; ++i)
-	{
-		const FVector& Pos = (*S.SpawnList)[i].Value;
-
-		FActorSpawnParameters Params;
-		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-		AFlowFieldObstacleActor* A = World->SpawnActor<AFlowFieldObstacleActor>(
-			AFlowFieldObstacleActor::StaticClass(),
-			Pos, FRotator::ZeroRotator, Params
-		);
-		if (A)
-		{
-#if WITH_EDITOR
-			A->SetFolderPath(TEXT("FlowField/Obstacles"));
-#endif
-			A->Sphere->SetSphereRadius(S.Half);
-			A->SourceActorName = FString::Printf(TEXT("Cell(%d,%d)"),
-			                                     (*S.SpawnList)[i].Key.X, (*S.SpawnList)[i].Key.Y);
-		}
-	}
-
-	S.SpawnIdx = BatchEnd;
-
-	if (S.SpawnIdx >= S.SpawnList->Num())
-	{
-		int32 Placed = S.SpawnList->Num();
-		UE_LOG(LogTemp, Warning,
-		       TEXT("[FlowFieldSubsystem] Scan complete — placed=%d"), Placed);
-
-		if (OnScanCompleted.IsBound())
-			OnScanCompleted.Execute(Placed);
-
-		OnScanProgressUpdated.Unbind();
-		OnScanCompleted.Unbind();
-		ScanState.Reset();
-	}
+	OnScanProgressUpdated.Unbind();
+	OnScanCompleted.Unbind();
+	ScanState.Reset();
 }
 
 // ── ClearObstacleActors ───────────────────────────────────────────
@@ -550,19 +516,14 @@ void UFlowFieldSubsystem::ClearObstacleActors()
 		ScanState.Reset();
 	}
 
+	if (FlowFieldActor)
+		FlowFieldActor->ClearBakedObstacles();
+
 	UWorld* World = GetWorld();
 	if (!World) return;
-
-	int32 Count = 0;
-	for (TActorIterator<AFlowFieldObstacleActor> It(World); It; ++It)
-	{
-		(*It)->Destroy();
-		Count++;
-	}
 
 	FlushPersistentDebugLines(World);
 	FlushDebugStrings(World);
 
-	UE_LOG(LogTemp, Log,
-	       TEXT("[FlowFieldSubsystem] ClearObstacleActors: destroyed %d actors"), Count);
+	UE_LOG(LogTemp, Log, TEXT("[FlowFieldSubsystem] ClearObstacleActors: baked obstacles cleared"));
 }
