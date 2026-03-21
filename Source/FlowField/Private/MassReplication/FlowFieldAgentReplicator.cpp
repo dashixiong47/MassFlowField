@@ -40,10 +40,10 @@ void FFlowFieldClientBubbleHandler::ApplyCustomDataOnSpawn(
     AFlowFieldActor* FlowActor   = FlowSub ? FlowSub->GetActor() : nullptr;
     if (!FlowActor || !FlowActor->bReady) return;
 
-    const FVector Loc    = FVector(Item.GetReplicatedPositionYawData().GetPosition());
-    float         SurfZ  = Loc.Z;
-    FVector       Normal = FVector::UpVector;
-    if (!FlowActor->GetSurfaceData(Loc, SurfZ, Normal)) return;
+    const FVector Loc   = FVector(Item.GetReplicatedPositionYawData().GetPosition());
+    float         SurfZ = Loc.Z;
+    FVector       Dummy = FVector::UpVector;
+    if (!FlowActor->GetSurfaceData(Loc, SurfZ, Dummy)) return;
 
     if (FTransformFragment* TF = EntityView.GetFragmentDataPtr<FTransformFragment>())
     {
@@ -53,7 +53,6 @@ void FFlowFieldClientBubbleHandler::ApplyCustomDataOnSpawn(
     if (FFlowFieldAgentFragment* Agent = EntityView.GetFragmentDataPtr<FFlowFieldAgentFragment>())
     {
         Agent->SmoothedSurfaceZ    = SurfZ;
-        Agent->SmoothedNormal      = Normal;
         Agent->bSurfaceInitialized = true;
     }
 }

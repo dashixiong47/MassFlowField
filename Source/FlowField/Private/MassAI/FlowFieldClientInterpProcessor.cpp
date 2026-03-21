@@ -1,4 +1,4 @@
-﻿#include "MassAI/FlowFieldClientInterpProcessor.h"
+﻿ #include "MassAI/FlowFieldClientInterpProcessor.h"
 #include "MassExecutionContext.h"
 #include "MassEntityManager.h"
 #include "MassCommonTypes.h"
@@ -88,38 +88,30 @@ void UFlowFieldClientInterpProcessor::Execute(
                     }
                 }
 
-                // ── 地面法线贴合（客户端本地，服务端由 MovementProcessor 处理）──
+                // ── 地面高度贴合（客户端本地）──────────────────────────
                 if (Agent.bSurfaceInitialized && FlowActor)
                 {
                     const FVector Pos = Transform.GetLocation();
                     float   LocalZ    = Pos.Z;
                     FVector LocalNormal = FVector::UpVector;
-                    if (FlowActor->GetSavedSurfaceData(Pos, LocalZ, LocalNormal))
+                    if (FlowActor->GetSavedSurfaceData(Pos, LocalZ, LocalNormal)
+                        && LocalZ != 0.f && FMath::Abs(LocalZ - Pos.Z) <= 500.f)
                     {
                         Agent.SmoothedSurfaceZ = FMath::FInterpTo(
                             Agent.SmoothedSurfaceZ, LocalZ, DeltaTime, Agent.SurfaceZSmoothSpeed);
-                        Agent.SmoothedNormal = FMath::VInterpTo(
-                            Agent.SmoothedNormal, LocalNormal, DeltaTime, Agent.SurfaceNormalSmoothSpeed);
-                        Agent.SmoothedNormal.Normalize();
 
                         FVector FixPos = Pos;
                         FixPos.Z = Agent.SmoothedSurfaceZ;
                         Transform.SetLocation(FixPos);
 
-                        // 朝移动方向旋转并贴合地面法线
+                        // 纯 Yaw 旋转，不跟随地面法线
                         if (!Agent.CurrentDir.IsNearlyZero())
                         {
-                            FVector FlatForward = FVector::VectorPlaneProject(
-                                Agent.CurrentDir, Agent.SmoothedNormal).GetSafeNormal();
-                            if (!FlatForward.IsNearlyZero())
-                            {
-                                FQuat    SlopeQuat = FQuat::FindBetweenNormals(
-                                    FVector::UpVector, Agent.SmoothedNormal);
-                                FRotator TargetRot = (SlopeQuat * FlatForward.ToOrientationQuat()).Rotator();
-                                FRotator NewRot    = FMath::RInterpTo(
-                                    Transform.GetRotation().Rotator(), TargetRot, DeltaTime, 10.f);
-                                Transform.SetRotation(NewRot.Quaternion());
-                            }
+                            FRotator NewRot = FMath::RInterpTo(
+                                Transform.GetRotation().Rotator(),
+                                Agent.CurrentDir.ToOrientationRotator(),
+                                DeltaTime, 10.f);
+                            Transform.SetRotation(NewRot.Quaternion());
                         }
                     }
                 }

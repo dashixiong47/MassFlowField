@@ -1,7 +1,9 @@
 ﻿#include "FlowFieldActor.h"
 #include "FlowFieldSubsystem.h"
 #include "FlowFieldObstacleActor.h"
+#include "FlowFieldTargetComponent.h"
 #include "DrawDebugHelpers.h"
+#include "FlowFieldDebugComponent.h"
 #include "Engine/LevelBounds.h"
 #include "EngineUtils.h"
 #include "Net/UnrealNetwork.h"
@@ -12,7 +14,8 @@
 
 AFlowFieldActor::AFlowFieldActor()
 {
-    PrimaryActorTick.bCanEverTick = false;
+    PrimaryActorTick.bCanEverTick = true;
+    PrimaryActorTick.TickInterval = 0.05f; // 每 50ms 检查一次相机，不必每帧
     bReplicates = true;
 
     USceneComponent* Root = CreateDefaultSubobject<USceneComponent>("Root");
@@ -26,6 +29,13 @@ AFlowFieldActor::AFlowFieldActor()
 #if WITH_EDITOR
     BoundsBox->bVisualizeComponent = true;
 #endif
+
+    // 调试可视化组件：SceneProxy + PDI，与引擎碰撞体积可视化相同机制
+    DebugComp = CreateDefaultSubobject<UFlowFieldDebugComponent>("FlowFieldDebugComp");
+    DebugComp->SetupAttachment(Root);
+    DebugComp->SetAbsolute(true, true, true); // 世界坐标，不随 Actor 偏移
+    DebugComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    DebugComp->SetCastShadow(false);
 }
 
 void AFlowFieldActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -46,6 +56,76 @@ void AFlowFieldActor::BeginPlay()
     // 客户端初次加入时，CurrentGoal 可能已经有值但不触发 OnRep
     BeginPlay_Client();
 
+    // 服务端：若配置了 TargetTag，启动定时追踪
+    if (HasAuthority() && !TargetTag.IsNone())
+    {
+        GetWorldTimerManager().SetTimer(TargetUpdateTimer, this,
+            &AFlowFieldActor::UpdateTarget,
+            TargetUpdateInterval, /*bLoop=*/true, /*FirstDelay=*/0.f);
+    }
+}
+
+void AFlowFieldActor::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+    // 编辑器放置/移动时：重建 obstacle 格子（无需目标/流场），让调试可见
+    if (!GetWorld() || GetWorld()->IsGameWorld()) return;
+
+    FVector Min, Max;
+    if (!ResolveBounds(Min, Max)) return;
+
+    int32 W = FMath::CeilToInt((Max.X - Min.X) / CellSize);
+    int32 H = FMath::CeilToInt((Max.Y - Min.Y) / CellSize);
+    if (W <= 0 || H <= 0) return;
+
+    FFlowFieldGrid EditorGrid;
+    EditorGrid.Init(Min, W, H, CellSize);
+    ApplyObstaclesToGrid(EditorGrid);
+
+    bReady = false;
+    Grid   = MoveTemp(EditorGrid);
+    // 不生成 integration/flow，仅障碍布局可视
+    CachedDebugZ.Reset();
+    CachedDebugW   = 0;
+    bDebugDirty    = true;
+    LastDebugCamPos = FVector(FLT_MAX, FLT_MAX, FLT_MAX);
+}
+
+void AFlowFieldActor::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+
+    // 没有任何调试开关打开时跳过
+    if (!bDrawGrid && !bDrawFlow && !bDrawHeatmap) return;
+    if (!Grid.IsValid()) return;
+
+    // 取相机位置
+    FVector CamPos = FVector::ZeroVector;
+    bool bHasCam   = false;
+#if WITH_EDITOR
+    if (GEditor && !GetWorld()->IsGameWorld())
+    {
+        for (FEditorViewportClient* VC : GEditor->GetAllViewportClients())
+        {
+            if (VC && VC->IsPerspective()) { CamPos = VC->GetViewLocation(); bHasCam = true; break; }
+        }
+    }
+#endif
+    if (!bHasCam)
+    {
+        if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
+            if (PC->PlayerCameraManager) { CamPos = PC->PlayerCameraManager->GetCameraLocation(); bHasCam = true; }
+    }
+    if (!bHasCam) return;
+
+    // 相机移动超过半格才重建线段/面片（避免每帧重建）
+    const float MovedSq = FVector::DistSquared2D(CamPos, LastDebugCamPos);
+    if (bDebugDirty || MovedSq >= FMath::Square(CellSize * 0.5f))
+    {
+        LastDebugCamPos = CamPos;
+        bDebugDirty     = false;
+        RebuildDebugLines(CamPos);
+    }
 
 }
 
@@ -148,14 +228,25 @@ void AFlowFieldActor::GenerateInternal(FVector GoalPos)
     }
 
     NewGrid.BuildFlowField();
+    NewGrid.ComputeBorderCells(); // 预计算边界格，AI 贴墙检测直接查表
+    {
+        int32 BorderCount = 0;
+        for (int32 Y = 0; Y < NewGrid.Height; Y++)
+            for (int32 X = 0; X < NewGrid.Width; X++)
+                if (NewGrid.IsBorderCell(FIntPoint(X, Y))) BorderCount++;
+        UE_LOG(LogTemp, Log, TEXT("[FlowField] BorderCells computed: %d / %d"), BorderCount, NewGrid.Width * NewGrid.Height);
+    }
 
     bReady = false;
     Grid = MoveTemp(NewGrid);
     bReady = true;
     Grid.ResetOccupancy();
 
-    ClearDebug();
-    DrawDebug();
+    // 流场更新：清 Z 缓存，下一个 Tick 重建调试绘制
+    CachedDebugZ.Reset();
+    CachedDebugW = 0;
+    bDebugDirty  = true;
+    LastDebugCamPos = FVector(FLT_MAX, FLT_MAX, FLT_MAX); // 强制重建
 
     UE_LOG(LogTemp, Log, TEXT("[FlowField] GenerateInternal complete ✓  NetMode=%d"),
         (int32)GetWorld()->GetNetMode());
@@ -191,31 +282,13 @@ void AFlowFieldActor::ApplyObstaclesToGrid(FFlowFieldGrid& TargetGrid)
         CellMax.Y = FMath::Clamp(CellMax.Y, 0, TargetGrid.Height - 1);
 
         for (int32 Y = CellMin.Y; Y <= CellMax.Y; ++Y)
+        for (int32 X = CellMin.X; X <= CellMax.X; ++X)
         {
-            for (int32 X = CellMin.X; X <= CellMax.X; ++X)
+            FFlowFieldCell& Cell = TargetGrid.GetCell(X, Y);
+            if (!Cell.IsBlocked())
             {
-                FVector CellCenter(
-                    TargetGrid.Origin.X + X * CellSize + Half,
-                    TargetGrid.Origin.Y + Y * CellSize + Half,
-                    Origin.Z
-                );
-
-                float OverlapX = FMath::Max(0.f,
-                    FMath::Min(CellCenter.X + Half, Origin.X + ExpandX) -
-                    FMath::Max(CellCenter.X - Half, Origin.X - ExpandX));
-                float OverlapY = FMath::Max(0.f,
-                    FMath::Min(CellCenter.Y + Half, Origin.Y + ExpandY) -
-                    FMath::Max(CellCenter.Y - Half, Origin.Y - ExpandY));
-
-                float OverlapRatio = (OverlapX * OverlapY) / (CellSize * CellSize);
-                if (OverlapRatio < ObstacleOverlapThreshold) continue;
-
-                FFlowFieldCell& Cell = TargetGrid.GetCell(X, Y);
-                if (!Cell.IsBlocked())
-                {
-                    Cell.Cost = 255;
-                    CellsMarked++;
-                }
+                Cell.Cost = 255;
+                CellsMarked++;
             }
         }
     }
@@ -329,143 +402,206 @@ bool AFlowFieldActor::ResolveBounds(FVector& OutMin, FVector& OutMax) const
 
 void AFlowFieldActor::ClearDebug()
 {
-    UWorld* World = GetWorld();
-    if (!World) return;
-    FlushPersistentDebugLines(World);
-    FlushDebugStrings(World);
+    if (DebugComp) DebugComp->ClearAll();
+    if (UWorld* World = GetWorld()) FlushDebugStrings(World);
 }
 
-void AFlowFieldActor::DrawDebug() const
+void AFlowFieldActor::RefreshDebugNow()
 {
-    if (!Grid.IsValid()) return;
+    if (!Grid.IsValid() || !DebugComp) return;
 
     UWorld* World = GetWorld();
     if (!World) return;
-
-    float MaxInteg = Grid.MaxIntegration();
-    float Half     = Grid.CellSize * 0.5f;
 
     FVector CamPos = FVector::ZeroVector;
-    bool bHasCam   = false;
-
+    bool bFound = false;
 #if WITH_EDITOR
     if (GEditor)
-    {
         for (FEditorViewportClient* VC : GEditor->GetAllViewportClients())
-        {
-            if (VC && VC->IsPerspective())
-            {
-                CamPos  = VC->GetViewLocation();
-                bHasCam = true;
-                break;
-            }
-        }
-    }
+            if (VC && VC->IsPerspective()) { CamPos = VC->GetViewLocation(); bFound = true; break; }
 #endif
-
-    if (!bHasCam)
-    {
+    if (!bFound)
         if (APlayerController* PC = World->GetFirstPlayerController())
-        {
-            if (PC->PlayerCameraManager)
-            {
-                CamPos  = PC->PlayerCameraManager->GetCameraLocation();
-                bHasCam = true;
-            }
-        }
+            if (PC->PlayerCameraManager) { CamPos = PC->PlayerCameraManager->GetCameraLocation(); bFound = true; }
+
+    if (!bFound) return;
+    LastDebugCamPos = CamPos;
+    bDebugDirty     = false;
+    RebuildDebugLines(CamPos);
+}
+
+void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
+{
+    if (!Grid.IsValid() || !DebugComp) return;
+    UWorld* World = GetWorld();
+    if (!World) return;
+
+    const float MaxInteg      = Grid.MaxIntegration();
+    const float Half          = Grid.CellSize * 0.5f;
+    const float ZOff          = 8.f;
+    const float MaxDrawDistSq = DebugDrawDistance * DebugDrawDistance;
+    const bool  bAnyDebug     = bDrawGrid || bDrawHeatmap || bDrawFlow;
+
+    // ── 顶点网格 Z 缓存 ──────────────────────────────────────────────────────
+    // 用 (W+1)×(H+1) 顶点网格替代 per-cell 单点线迹 + 法线平面投影。
+    // 每个角单独打线迹 → 斜面/起伏地形完全贴合；相邻格子共用顶点 → 无冗余线迹。
+    const int32 VW = Grid.Width  + 1;
+    const int32 VH = Grid.Height + 1;
+
+    if (CachedDebugW != Grid.Width || CachedDebugH != Grid.Height)
+    {
+        CachedDebugZ.Init(-BIG_NUMBER, VW * VH);
+        CachedDebugW = Grid.Width;
+        CachedDebugH = Grid.Height;
     }
 
-    const float MaxDrawDistSq = DebugDrawDistance * DebugDrawDistance;
-
-    for (int32 Y = 0; Y < Grid.Height; ++Y)
+    // 惰性取顶点 Z：命中则缓存，未命中留 -BIG_NUMBER 等下帧重试
+    auto GetVertexZ = [&](int32 VX, int32 VY) -> float
     {
-        for (int32 X = 0; X < Grid.Width; ++X)
+        const int32 VI = VY * VW + VX;
+        if (CachedDebugZ[VI] > -BIG_NUMBER) return CachedDebugZ[VI];
+
+        const float WX = Grid.Origin.X + VX * Grid.CellSize;
+        const float WY = Grid.Origin.Y + VY * Grid.CellSize;
+        FHitResult Hit;
+        if (World->LineTraceSingleByObjectType(Hit,
+                FVector(WX, WY, 100000.f),
+                FVector(WX, WY, -100000.f),
+                FCollisionObjectQueryParams(ECC_WorldStatic)))
+        {
+            CachedDebugZ[VI] = Hit.ImpactPoint.Z;
+        }
+        return CachedDebugZ[VI] > -BIG_NUMBER ? CachedDebugZ[VI] : 0.f;
+    };
+
+    TArray<FFlowFieldDebugLine> Lines;
+    TArray<FFlowFieldDebugQuad> Quads;
+    Lines.Reserve(Grid.Width * Grid.Height * 6);
+    if (bDrawHeatmap) Quads.Reserve(Grid.Width * Grid.Height);
+
+    if (bAnyDebug)
+    {
+        for (int32 Y = 0; Y < Grid.Height; ++Y)
+        for (int32 X = 0; X < Grid.Width;  ++X)
         {
             const FFlowFieldCell& Cell = Grid.GetCell(X, Y);
+            const float CX = Grid.Origin.X + X * Grid.CellSize + Half;
+            const float CY = Grid.Origin.Y + Y * Grid.CellSize + Half;
 
-            FVector Center(
-                Grid.Origin.X + X * Grid.CellSize + Half,
-                Grid.Origin.Y + Y * Grid.CellSize + Half,
-                Cell.SurfaceZ + 8.f
-            );
+            const float Dx = CX - CamPos.X, Dy = CY - CamPos.Y;
+            if (Dx*Dx + Dy*Dy > MaxDrawDistSq) continue;
 
-            if (bHasCam && FVector::DistSquared2D(Center, CamPos) > MaxDrawDistSq) continue;
+            const bool bBlocked = Cell.IsBlocked();
 
+            // ── 四角地面 Z（每角独立，完全贴合地形起伏）────────────────
+            const float ZTL = GetVertexZ(X,   Y  ) + ZOff;
+            const float ZTR = GetVertexZ(X+1, Y  ) + ZOff;
+            const float ZBR = GetVertexZ(X+1, Y+1) + ZOff;
+            const float ZBL = GetVertexZ(X,   Y+1) + ZOff;
+            const float ZC  = (ZTL + ZTR + ZBR + ZBL) * 0.25f; // 格心 Z（箭头用）
+
+            const FVector TL(CX-Half, CY-Half, ZTL);
+            const FVector TR(CX+Half, CY-Half, ZTR);
+            const FVector BR(CX+Half, CY+Half, ZBR);
+            const FVector BL(CX-Half, CY+Half, ZBL);
+            const FVector Center(CX, CY, ZC);
+
+            // ── 热力图：实心四边形 ────────────────────────────────────
+            if (bDrawHeatmap && !bBlocked)
+            {
+                FLinearColor Base;
+                if (Cell.IsReachable() && MaxInteg > 0.f)
+                {
+                    // 16 步量化 → SceneProxy 按颜色分组，DrawCall 数 ≤ 16
+                    const float T = FMath::RoundToFloat(
+                        FMath::Clamp(Cell.Integration / MaxInteg, 0.f, 1.f) * 15.f) / 15.f;
+                    Base = FLinearColor::LerpUsingHSV(DebugHeatLow, DebugHeatHigh, T);
+                }
+                else
+                {
+                    Base = DebugColorNoFlow;
+                }
+                Quads.Add({ {TL, TR, BR, BL}, Base.ToFColor(false) });
+            }
+
+            // ── 网格轮廓 ──────────────────────────────────────────────
             if (bDrawGrid)
             {
-                FColor Col   = Cell.IsBlocked() ? FColor(180, 0, 0) : FColor(0, 120, 0);
-                float  Thick = Cell.IsBlocked() ? 3.f : 1.f;
-                DrawDebugCircle(World, Center, Half, 8, Col, true, -1.f, 0, Thick,
-                    FVector(1,0,0), FVector(0,1,0), false);
+                const FLinearColor& Col  = bBlocked ? DebugColorObstacle : DebugColorWalkable;
+                const float        Thick = bBlocked ? 1.5f : 0.5f;
+                Lines.Add({TL, TR, Col, Thick});
+                Lines.Add({TR, BR, Col, Thick});
+                Lines.Add({BR, BL, Col, Thick});
+                Lines.Add({BL, TL, Col, Thick});
             }
 
-            if (bDrawHeatmap && Cell.IsReachable())
+            // ── 流场箭头 ──────────────────────────────────────────────
+            if (bDrawFlow && !Cell.FlowDir.IsZero() && !bBlocked)
             {
-                float T = (MaxInteg > 0.f) ? (Cell.Integration / MaxInteg) : 0.f;
-                FLinearColor Heat = FLinearColor::LerpUsingHSV(
-                    FLinearColor(0.33f, 1.f, 0.8f), FLinearColor(0.f, 1.f, 0.8f), T);
-                DrawDebugCircle(World, Center, Half * 0.5f, 6, Heat.ToFColor(true),
-                    true, -1.f, 0, 1.f, FVector(1,0,0), FVector(0,1,0), false);
-            }
+                FVector Dir = FVector(Cell.FlowDir.X, Cell.FlowDir.Y, 0.f).GetSafeNormal();
+                const float Len  = Grid.CellSize * ArrowScale;
+                const float TipX = CX + Dir.X * Len;
+                const float TipY = CY + Dir.Y * Len;
 
-            if (bDrawFlow && !Cell.FlowDir.IsZero() && !Cell.IsBlocked())
-            {
-                FVector Dir = FVector::VectorPlaneProject(
-                    FVector(Cell.FlowDir.X, Cell.FlowDir.Y, 0.f), Cell.Normal).GetSafeNormal();
-                float ArrowLen = Grid.CellSize * ArrowScale;
-                DrawDebugDirectionalArrow(World, Center, Center + Dir * ArrowLen,
-                    ArrowLen * 0.35f, FColor::White, true, -1.f, 0, 1.5f);
-            }
+                // 箭头终点 Z：取目标格子四个角的均值
+                float TipZ = ZC;
+                FIntPoint TC = Grid.WorldToCell(FVector(TipX, TipY, 0.f));
+                if (Grid.IsInBounds(TC))
+                {
+                    TipZ = (GetVertexZ(TC.X,   TC.Y  ) + GetVertexZ(TC.X+1, TC.Y  ) +
+                            GetVertexZ(TC.X,   TC.Y+1) + GetVertexZ(TC.X+1, TC.Y+1))
+                           * 0.25f + ZOff;
+                }
 
-            if (bDrawScores)
-            {
-                FString Line1 = Cell.IsBlocked() ? TEXT("X") :
-                    (Cell.IsReachable() ? FString::Printf(TEXT("%.0f"), Cell.Integration) : TEXT("?"));
-                DrawDebugString(World, Center + FVector(0,0,15.f), Line1, nullptr,
-                    Cell.IsBlocked() ? FColor::Red : FColor::Yellow, -1.f, true, 0.7f);
+                const FVector Tip(TipX, TipY, TipZ);
+                Lines.Add({Center, Tip, DebugColorArrow, 1.5f});
+                Lines.Add({Tip, Tip + Dir.RotateAngleAxis( 145.f, FVector::UpVector) * Len * 0.3f, DebugColorArrow, 1.f});
+                Lines.Add({Tip, Tip + Dir.RotateAngleAxis(-145.f, FVector::UpVector) * Len * 0.3f, DebugColorArrow, 1.f});
             }
         }
     }
 
-    if (bReady)
+    // ── 目标标记（菱形 + 竖线）────────────────────────────────────────
+    if (bReady && !CurrentGoal.IsZero())
     {
-        DrawDebugSphere(World, CurrentGoal + FVector(0,0,60),
-            Grid.CellSize * 0.3f, 12, FColor::Red, true, -1.f, 0, 4.f);
-        DrawDebugString(World, CurrentGoal + FVector(0,0,120),
-            TEXT("GOAL"), nullptr, FColor::Red, -1.f, true, 1.2f);
+        const FVector Above = CurrentGoal + FVector(0, 0, 50.f);
+        const float   R     = Grid.CellSize * 0.35f;
+        Lines.Add({Above + FVector( R, 0, 0), Above + FVector(0,  R, 0), DebugColorGoal, 2.f});
+        Lines.Add({Above + FVector(0,  R, 0), Above + FVector(-R, 0, 0), DebugColorGoal, 2.f});
+        Lines.Add({Above + FVector(-R, 0, 0), Above + FVector(0, -R, 0), DebugColorGoal, 2.f});
+        Lines.Add({Above + FVector(0, -R, 0), Above + FVector( R, 0, 0), DebugColorGoal, 2.f});
+        Lines.Add({CurrentGoal, Above, DebugColorGoal, 2.f});
     }
 
-    if (bDrawGrid && !ObstacleTag.IsNone())
-    {
-        for (TActorIterator<AActor> It(GetWorld()); It; ++It)
-        {
-            AActor* Actor = *It;
-            if (!Actor->ActorHasTag(ObstacleTag)) continue;
+    DebugComp->Update(MoveTemp(Lines), MoveTemp(Quads));
 
-            FVector Origin, Extent;
-            Actor->GetActorBounds(true, Origin, Extent);
-            float ExpandX = Extent.X + ObstacleRadius;
-            float ExpandY = Extent.Y + ObstacleRadius;
-            FVector BoxCenter(Origin.X, Origin.Y, Origin.Z + 8.f);
-
-            DrawDebugBox(World, BoxCenter, FVector(ExpandX, ExpandY, 5.f),
-                FColor(255,100,0), true, -1.f, 0, 2.f);
-
-            float CrossSize = FMath::Min(FMath::Min(ExpandX, ExpandY) * 0.3f, 60.f);
-            DrawDebugDirectionalArrow(World,
-                BoxCenter - FVector(CrossSize,0,0), BoxCenter + FVector(CrossSize,0,0),
-                CrossSize * 0.4f, FColor(255,100,0), true, -1.f, 0, 2.f);
-            DrawDebugDirectionalArrow(World,
-                BoxCenter - FVector(0,CrossSize,0), BoxCenter + FVector(0,CrossSize,0),
-                CrossSize * 0.4f, FColor(255,100,0), true, -1.f, 0, 2.f);
-
-            if (bDrawScores)
-                DrawDebugString(World, BoxCenter + FVector(0,0,30),
-                    FString::Printf(TEXT("%.0fx%.0f"), ExpandX*2.f, ExpandY*2.f),
-                    nullptr, FColor(255,160,50), -1.f, true, 0.8f);
-        }
-    }
 }
+
+#if WITH_EDITOR
+void AFlowFieldActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+    Super::PostEditChangeProperty(PropertyChangedEvent);
+
+    // 网格/障碍参数变化：重新生成 obstacle 布局
+    static const TArray<FName> GridProps = {
+        GET_MEMBER_NAME_CHECKED(AFlowFieldActor, CellSize),
+        GET_MEMBER_NAME_CHECKED(AFlowFieldActor, ObstacleTag),
+        GET_MEMBER_NAME_CHECKED(AFlowFieldActor, ObstacleRadius),
+        GET_MEMBER_NAME_CHECKED(AFlowFieldActor, ObstacleOverlapThreshold),
+    };
+    const FName Changed = PropertyChangedEvent.GetPropertyName();
+    if (GridProps.Contains(Changed))
+    {
+        CachedDebugZ.Reset(); CachedDebugW = 0;
+        OnConstruction(GetActorTransform()); // 重建 obstacle 格子
+        return; // OnConstruction 内部会设 bDebugDirty，Tick 会重画
+    }
+
+    // 调试开关变化：立即重建线段
+    bDebugDirty = true;
+    RefreshDebugNow();
+}
+#endif
 
 #if WITH_EDITOR
 void AFlowFieldActor::PostEditMove(bool bFinished)
@@ -475,3 +611,47 @@ void AFlowFieldActor::PostEditMove(bool bFinished)
         Generate(CurrentGoal);
 }
 #endif
+
+TArray<FVector> AFlowFieldActor::FindPath(FVector Start, FVector Goal) const
+{
+    TArray<FVector> Result;
+    if (!Grid.IsValid()) return Result;
+
+    const FIntPoint StartCell = Grid.WorldToCell(Start);
+    const FIntPoint GoalCell  = Grid.WorldToCell(Goal);
+
+    TArray<FIntPoint> CellPath;
+    if (!Grid.FindPathAStar(StartCell, GoalCell, CellPath)) return Result;
+
+    Result.Reserve(CellPath.Num());
+    for (const FIntPoint& P : CellPath)
+        Result.Add(Grid.CellToWorld(P.X, P.Y));
+
+    return Result;
+}
+
+void AFlowFieldActor::UpdateTarget()
+{
+    UWorld* World = GetWorld();
+    if (!World || TargetTag.IsNone()) return;
+
+    TrackedTargets.Reset();
+
+    // 优先：Actor 上挂了 UFlowFieldTargetComponent 且 ComponentTags 含 TargetTag
+    // 备用：Actor 本身带有 TargetTag（兼容旧用法）
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        AActor* Actor = *It;
+        if (!Actor) continue;
+
+        UFlowFieldTargetComponent* Comp =
+            Actor->FindComponentByClass<UFlowFieldTargetComponent>();
+
+        const bool bCompMatch  = Comp && Comp->ComponentTags.Contains(TargetTag);
+        const bool bActorMatch = !bCompMatch && Actor->ActorHasTag(TargetTag);
+        if (!bCompMatch && !bActorMatch) continue;
+
+        const float Radius = Comp ? Comp->ChaseRadius : DefaultChaseRadius;
+        TrackedTargets.Add({Actor->GetActorLocation(), Radius});
+    }
+}

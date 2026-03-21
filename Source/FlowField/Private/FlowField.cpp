@@ -2,6 +2,8 @@
 
 #include "FlowField.h"
 
+#include "FlowFieldStyle.h"
+
 #if WITH_EDITOR
 #include "Flowfieldeditortoolbar.h"
 #endif
@@ -11,6 +13,7 @@
 void FFlowFieldModule::StartupModule()
 {
 #if WITH_EDITOR
+	FFlowFieldStyle::Initialize();
 	EditorToolbar = MakeShared<FFlowFieldEditorToolbar>();
 	EditorToolbar->Register();
 #endif
@@ -20,6 +23,7 @@ void FFlowFieldModule::StartupModule()
 void FFlowFieldModule::ShutdownModule()
 {
 #if WITH_EDITOR
+	FFlowFieldStyle::Shutdown();
 	if (EditorToolbar.IsValid())
 		EditorToolbar->Unregister();
 #endif

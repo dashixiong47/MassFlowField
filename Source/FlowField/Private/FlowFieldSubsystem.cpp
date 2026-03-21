@@ -378,12 +378,11 @@ void UFlowFieldSubsystem::SubmitNextBatch()
 				}
 			});
 
-		World->AsyncLineTraceByChannel(
+		World->AsyncLineTraceByObjectType(
 			EAsyncTraceType::Single,
 			Start, End,
-			ECC_GameTraceChannel1,
+			FCollisionObjectQueryParams(ECC_WorldStatic),
 			QueryParams,
-			FCollisionResponseParams::DefaultResponseParam,
 			&Delegate
 		);
 	}
@@ -470,14 +469,14 @@ void UFlowFieldSubsystem::FinalizeScan()
 				}
 			}
 
-			FColor Col = bIsObstacle ? FColor::Red : FColor::Green;
-			DrawDebugLine(World,
-			              FVector(Center.X, Center.Y, S.Min.Z + 5000.f),
-			              FVector(Center.X, Center.Y, Info.SurfaceZ),
-			              Col, true, 30.f, 0, 1.f);
-			DrawDebugPoint(World,
-			               FVector(Center.X, Center.Y, Info.SurfaceZ),
-			               6.f, Col, true, 30.f);
+			// FColor Col = bIsObstacle ? FColor::Red : FColor::Green;
+			// DrawDebugLine(World,
+			//               FVector(Center.X, Center.Y, S.Min.Z + 5000.f),
+			//               FVector(Center.X, Center.Y, Info.SurfaceZ),
+			//               Col, true, 30.f, 0, 1.f);
+			// DrawDebugPoint(World,
+			//                FVector(Center.X, Center.Y, Info.SurfaceZ),
+			//                6.f, Col, true, 30.f);
 
 			if (bIsObstacle)
 				S.SpawnList->Add({Cell, FVector(Center.X, Center.Y, Info.SurfaceZ)});

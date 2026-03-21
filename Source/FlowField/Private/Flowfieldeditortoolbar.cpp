@@ -1,17 +1,19 @@
 ﻿#include "FlowFieldEditorToolbar.h"
 
 #if WITH_EDITOR
+
 #include "FlowFieldSubsystem.h"
 #include "FlowFieldActor.h"
 #include "ToolMenus.h"
 #include "Editor.h"
 #include "EngineUtils.h"
-#include "Framework/Notifications/NotificationManager.h"
-#include "Widgets/Notifications/SNotificationList.h"
-
-// ─────────────────────────────────────────────────────────────────────────────
+#include "FlowFieldStyle.h"
 
 #define LOCTEXT_NAMESPACE "FlowField"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Commands
+// ─────────────────────────────────────────────────────────────────────────────
 
 void FFlowFieldCommands::RegisterCommands()
 {
@@ -32,17 +34,21 @@ void FFlowFieldCommands::RegisterCommands()
 
 #undef LOCTEXT_NAMESPACE
 
-// ── Register ──────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Register
+// ─────────────────────────────────────────────────────────────────────────────
 
 void FFlowFieldEditorToolbar::Register()
 {
 	FFlowFieldCommands::Register();
 
 	CommandList = MakeShared<FUICommandList>();
+
 	CommandList->MapAction(
 		FFlowFieldCommands::Get().ScanObstacles,
 		FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnScanObstacles)
 	);
+
 	CommandList->MapAction(
 		FFlowFieldCommands::Get().ClearObstacles,
 		FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnClearObstacles)
@@ -65,67 +71,84 @@ void FFlowFieldEditorToolbar::RegisterMenuExtensions()
 
 	FToolMenuSection& Section = Menu->FindOrAddSection("FlowField", INVTEXT("FlowField"));
 
-	FToolMenuEntry ScanEntry = FToolMenuEntry::InitToolBarButton(
-		FFlowFieldCommands::Get().ScanObstacles,
-		INVTEXT("FF Scan"),
-		INVTEXT("Scan obstacles and place FlowField marker Actors"),
-		FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Layers")
+	// ✅ 单按钮下拉菜单
+	FToolMenuEntry ComboEntry = FToolMenuEntry::InitComboButton(
+		"FlowFieldCombo",
+		FUIAction(),
+		FOnGetContent::CreateRaw(this, &FFlowFieldEditorToolbar::GenerateMenuContent),
+		INVTEXT("FlowField"),
+		INVTEXT("FlowField Tools"),
+		FSlateIcon(FFlowFieldStyle::GetStyleSetName(), "FlowField.Icon")
 	);
-	ScanEntry.SetCommandList(CommandList);
-	Section.AddEntry(ScanEntry);
 
-	FToolMenuEntry ClearEntry = FToolMenuEntry::InitToolBarButton(
-		FFlowFieldCommands::Get().ClearObstacles,
-		INVTEXT("FF Clear"),
-		INVTEXT("Remove all FlowField obstacle marker Actors"),
-		FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Layers")
-	);
-	ClearEntry.SetCommandList(CommandList);
-	Section.AddEntry(ClearEntry);
+	Section.AddEntry(ComboEntry);
 }
 
 void FFlowFieldEditorToolbar::Unregister()
 {
 	CancelScanNotification();
+
 	UToolMenus::UnRegisterStartupCallback(this);
 	UToolMenus::Get()->UnregisterOwner(this);
+
 	FFlowFieldCommands::Unregister();
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Menu
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<SWidget> FFlowFieldEditorToolbar::GenerateMenuContent()
+{
+	FMenuBuilder MenuBuilder(true, CommandList);
+
+	// 原有功能
+	// ✅ Scan
+	MenuBuilder.AddMenuEntry(
+		INVTEXT("FF Scan"),
+		INVTEXT("Scan obstacles"),
+		FSlateIcon(FFlowFieldStyle::GetStyleSetName(), "FlowField.Scan"),
+		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnScanObstacles))
+	);
+
+	// ✅ Clear
+	MenuBuilder.AddMenuEntry(
+		INVTEXT("FF Clear"),
+		INVTEXT("Clear obstacles"),
+		FSlateIcon(FFlowFieldStyle::GetStyleSetName(), "FlowField.Clear"),
+		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnClearObstacles))
+	);
+	// ✅ 以后扩展直接加这里
+	/*
+	MenuBuilder.AddMenuSeparator();
+
+	MenuBuilder.AddMenuEntry(
+		INVTEXT("Debug Draw"),
+		INVTEXT("Toggle debug draw"),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnDebugDraw))
+	);
+	*/
+
+	return MenuBuilder.MakeWidget();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Handlers
+// ─────────────────────────────────────────────────────────────────────────────
 
 void FFlowFieldEditorToolbar::OnScanObstacles()
 {
-	UE_LOG(LogTemp, Warning, TEXT("[FF Toolbar] OnScanObstacles called"));
-
-	if (!GEditor)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[FF Toolbar] GEditor is null"));
-		return;
-	}
+	if (!GEditor) return;
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (!World)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[FF Toolbar] World is null"));
-		return;
-	}
+	if (!World) return;
 
 	UFlowFieldSubsystem* Sub = World->GetSubsystem<UFlowFieldSubsystem>();
-	if (!Sub)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[FF Toolbar] FlowFieldSubsystem not found"));
-		return;
-	}
+	if (!Sub || Sub->IsScanning()) return;
 
-	if (Sub->IsScanning())
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[FF Toolbar] Scan already in progress"));
-		return;
-	}
-
-	// 计算总格子数用于进度显示
 	int32 Total = 0;
+
 	if (AFlowFieldActor* Actor = Sub->GetActor())
 	{
 		FVector Min, Max;
@@ -136,73 +159,51 @@ void FFlowFieldEditorToolbar::OnScanObstacles()
 			Total = W * H;
 		}
 	}
-	else
-	{
-		// FlowFieldActor 还没注册，从场景找
-		for (TActorIterator<AFlowFieldActor> It(World); It; ++It)
-		{
-			FVector Min, Max;
-			if ((*It)->ResolveBounds(Min, Max))
-			{
-				int32 W = FMath::CeilToInt((Max.X - Min.X) / (*It)->CellSize);
-				int32 H = FMath::CeilToInt((Max.Y - Min.Y) / (*It)->CellSize);
-				Total = W * H;
-			}
-			break;
-		}
-	}
 
 	ShowScanNotification(Total);
+
+	// 绑定回调（安全写法）
+	Sub->OnScanProgressUpdated.BindLambda(
+		[this, Total](int32 Submitted)
+		{
+			UpdateScanNotification(Submitted, Total);
+		}
+	);
+
+	Sub->OnScanCompleted.BindLambda(
+		[this](int32 Placed)
+		{
+			FinishScanNotification(Placed);
+		}
+	);
+
 	Sub->ScanAndPlaceObstacles();
-
-	// 启动进度更新 Timer（每0.1秒更新一次进度条）
-	if (GEditor)
-	{
-		TWeakObjectPtr<UFlowFieldSubsystem> WeakSub(Sub);
-		TWeakPtr<FFlowFieldEditorToolbar> WeakThis(
-			TSharedPtr<FFlowFieldEditorToolbar>(this, [](FFlowFieldEditorToolbar*){})
-		);
-
-		// 用 UE 的 Tick 代替 Timer，编辑器里 Timer 可能不稳定
-		// 直接绑定到 Sub 的进度回调
-		Sub->OnScanProgressUpdated.BindLambda(
-			[this, Total](int32 Submitted)
-			{
-				UpdateScanNotification(Submitted, Total);
-			}
-		);
-
-		Sub->OnScanCompleted.BindLambda(
-			[this](int32 Placed)
-			{
-				FinishScanNotification(Placed);
-			}
-		);
-	}
 }
 
 void FFlowFieldEditorToolbar::OnClearObstacles()
 {
-	UE_LOG(LogTemp, Warning, TEXT("[FF Toolbar] OnClearObstacles called"));
+	if (!GEditor) return;
 
-	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World) return;
 
-	UFlowFieldSubsystem* Sub = World->GetSubsystem<UFlowFieldSubsystem>();
-	if (!Sub) return;
+	if (UFlowFieldSubsystem* Sub = World->GetSubsystem<UFlowFieldSubsystem>())
+	{
+		CancelScanNotification();
+		Sub->ClearObstacleActors();
 
-	CancelScanNotification();
-	Sub->ClearObstacleActors();
+		FNotificationInfo Info(INVTEXT("FlowField obstacles cleared"));
+		Info.bFireAndForget = true;
+		Info.ExpireDuration = 2.f;
+		Info.Image = FAppStyle::GetBrush("Icons.SuccessWithColor");
 
-	// 完成通知
-	FNotificationInfo Info(INVTEXT("FlowField obstacles cleared"));
-	Info.bFireAndForget = true;
-	Info.ExpireDuration = 2.f;
-	Info.Image = FAppStyle::GetBrush("Icons.SuccessWithColor");
-	FSlateNotificationManager::Get().AddNotification(Info);
+		FSlateNotificationManager::Get().AddNotification(Info);
+	}
 }
 
-// ── Notification helpers ───────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Notification
+// ─────────────────────────────────────────────────────────────────────────────
 
 void FFlowFieldEditorToolbar::ShowScanNotification(int32 Total)
 {
@@ -212,13 +213,11 @@ void FFlowFieldEditorToolbar::ShowScanNotification(int32 Total)
 		INVTEXT("FlowField Scanning... 0 / {0}"),
 		FText::AsNumber(Total)
 	));
-	Info.bFireAndForget   = false;  // 手动控制消失
-	Info.bUseSuccessFailIcons = true;
-	Info.bUseLargeFont    = false;
-	Info.ExpireDuration   = 0.f;
+
+	Info.bFireAndForget = false;
+	Info.ExpireDuration = 0.f;
 	Info.Image = FAppStyle::GetBrush("Icons.Loading");
 
-	// 取消按钮
 	Info.ButtonDetails.Add(FNotificationButtonInfo(
 		INVTEXT("Cancel"),
 		FText(),
@@ -227,56 +226,59 @@ void FFlowFieldEditorToolbar::ShowScanNotification(int32 Total)
 
 	ScanNotification = FSlateNotificationManager::Get().AddNotification(Info);
 
-	if (TSharedPtr<SNotificationItem> Pin = ScanNotification.Pin())
+	if (auto Pin = ScanNotification.Pin())
 		Pin->SetCompletionState(SNotificationItem::CS_Pending);
 }
 
 void FFlowFieldEditorToolbar::UpdateScanNotification(int32 Submitted, int32 Total)
 {
-	TSharedPtr<SNotificationItem> Pin = ScanNotification.Pin();
-	if (!Pin) return;
+	if (auto Pin = ScanNotification.Pin())
+	{
+		float Pct = Total > 0 ? (float)Submitted / (float)Total * 100.f : 0.f;
 
-	float Pct = Total > 0 ? (float)Submitted / (float)Total * 100.f : 0.f;
-	Pin->SetText(FText::Format(
-		INVTEXT("FlowField Scanning... {0} / {1} ({2}%)"),
-		FText::AsNumber(Submitted),
-		FText::AsNumber(Total),
-		FText::AsNumber(FMath::RoundToInt(Pct))
-	));
+		Pin->SetText(FText::Format(
+			INVTEXT("FlowField Scanning... {0}/{1} ({2}%)"),
+			FText::AsNumber(Submitted),
+			FText::AsNumber(Total),
+			FText::AsNumber(FMath::RoundToInt(Pct))
+		));
+	}
 }
 
 void FFlowFieldEditorToolbar::FinishScanNotification(int32 Placed)
 {
-	TSharedPtr<SNotificationItem> Pin = ScanNotification.Pin();
-	if (!Pin) return;
+	if (auto Pin = ScanNotification.Pin())
+	{
+		Pin->SetText(FText::Format(
+			INVTEXT("FlowField Scan Complete — {0} placed"),
+			FText::AsNumber(Placed)
+		));
 
-	Pin->SetText(FText::Format(
-		INVTEXT("FlowField Scan Complete — {0} obstacles placed"),
-		FText::AsNumber(Placed)
-	));
-	Pin->SetCompletionState(SNotificationItem::CS_Success);
-	Pin->ExpireAndFadeout();
+		Pin->SetCompletionState(SNotificationItem::CS_Success);
+		Pin->ExpireAndFadeout();
+	}
 
 	ScanNotification.Reset();
 }
 
 void FFlowFieldEditorToolbar::CancelScanNotification()
 {
-	TSharedPtr<SNotificationItem> Pin = ScanNotification.Pin();
-	if (!Pin) return;
+	if (auto Pin = ScanNotification.Pin())
+	{
+		Pin->SetCompletionState(SNotificationItem::CS_Fail);
+		Pin->ExpireAndFadeout();
+	}
 
-	Pin->SetCompletionState(SNotificationItem::CS_Fail);
-	Pin->ExpireAndFadeout();
 	ScanNotification.Reset();
 
-	// 停止正在进行的扫描
 	if (GEditor)
 	{
-		UWorld* World = GEditor->GetEditorWorldContext().World();
-		if (World)
+		if (UWorld* World = GEditor->GetEditorWorldContext().World())
 		{
 			if (UFlowFieldSubsystem* Sub = World->GetSubsystem<UFlowFieldSubsystem>())
+			{
 				Sub->ClearObstacleActors();
+			}
 		}
 	}
 }

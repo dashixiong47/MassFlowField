@@ -5,7 +5,6 @@
 #include "MassEntityTypes.h"
 #include "MassEntityQuery.h"
 #include "MassClientBubbleInfoBase.h"
-#include "MassAI/FlowFieldSpatialHash.h"
 #include "FlowFieldSubsystem.generated.h"
 
 class AFlowFieldActor;
@@ -84,9 +83,6 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="FlowField")
     AFlowFieldActor* GetActor() const { return FlowFieldActor; }
-
-    // ── 空间哈希（由 FlowFieldSpatialHashProcessor 每帧更新）────────
-    FFlowFieldSpatialHash SpatialHash;
 
     // ── 击退 ──────────────────────────────────────────────────────
 

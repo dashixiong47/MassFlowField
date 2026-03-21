@@ -4,7 +4,16 @@
 #include "Components/BoxComponent.h"
 #include "FlowFieldTypes.h"
 #include "FlowFieldGrid.h"
+#include "FlowFieldDebugComponent.h"
+#include "FlowFieldTargetComponent.h"
 #include "FlowFieldActor.generated.h"
+
+// 被追踪目标信息（由 UpdateTarget 定时缓存，供各 Processor 读取）
+struct FFlowFieldTrackedTarget
+{
+    FVector Position = FVector::ZeroVector;
+    float   Radius   = 0.f;
+};
 
 UCLASS()
 class FLOWFIELD_API AFlowFieldActor : public AActor
@@ -19,6 +28,23 @@ public:
     UPROPERTY(EditAnywhere, Category="FlowField",
         meta=(DisplayName="边界模式"))
     EFlowFieldBoundsMode BoundsMode = EFlowFieldBoundsMode::VolumeBox;
+
+    // ── 目标追踪 ──────────────────────────────────────────────────
+
+    /** 带此 Tag 的 Actor 会被 AI 追踪（仅服务端生效）。空 Name 时停用自动追踪。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|目标追踪",
+        meta=(DisplayName="追踪目标 Tag"))
+    FName TargetTag = FName("Player");
+
+    /** 无 UFlowFieldTargetComponent 时的默认追踪半径（cm）。目标超出此距离不追踪。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|目标追踪",
+        meta=(ClampMin="0", DisplayName="默认追踪半径（cm）"))
+    float DefaultChaseRadius = 5000.f;
+
+    /** 追踪目标更新间隔（s）。0.5 = 每秒更新两次流场目标。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|目标追踪",
+        meta=(ClampMin="0.1", ClampMax="5.0", DisplayName="目标更新间隔（s）"))
+    float TargetUpdateInterval = 0.5f;
 
     UPROPERTY(EditAnywhere, Category="FlowField",
         meta=(DisplayName="边界盒"))
@@ -52,19 +78,15 @@ public:
 
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
         meta=(DisplayName="绘制网格"))
-    bool bDrawGrid = true;
+    bool bDrawGrid = false;
 
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
         meta=(DisplayName="绘制流场方向"))
-    bool bDrawFlow = true;
+    bool bDrawFlow = false;
 
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
         meta=(DisplayName="绘制热力图"))
     bool bDrawHeatmap = true;
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试",
-        meta=(DisplayName="绘制 Integration 数值"))
-    bool bDrawScores = true;
 
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
         meta=(DisplayName="箭头缩放"))
@@ -73,6 +95,36 @@ public:
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
         meta=(ClampMin="500", ClampMax="50000", DisplayName="调试绘制距离（cm）"))
     float DebugDrawDistance = 5000.f;
+
+    // ── 调试颜色 ──────────────────────────────────────────────────
+
+    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
+        meta=(DisplayName="热力图近端色（Integration=0）"))
+    FLinearColor DebugHeatLow  = FLinearColor(0.f, 1.f, 0.f);  // 绿
+
+    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
+        meta=(DisplayName="热力图远端色（Integration=Max）"))
+    FLinearColor DebugHeatHigh = FLinearColor(1.f, 0.f, 0.f);  // 红
+
+    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
+        meta=(DisplayName="无流场时填充色"))
+    FLinearColor DebugColorNoFlow = FLinearColor(0.47f, 0.47f, 0.47f); // 灰
+
+    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
+        meta=(DisplayName="障碍格轮廓色"))
+    FLinearColor DebugColorObstacle = FLinearColor(0.9f, 0.15f, 0.1f); // 红
+
+    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
+        meta=(DisplayName="可走格轮廓色"))
+    FLinearColor DebugColorWalkable = FLinearColor(0.1f, 0.7f, 0.15f); // 绿
+
+    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
+        meta=(DisplayName="流场箭头色"))
+    FLinearColor DebugColorArrow = FLinearColor::White;
+
+    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
+        meta=(DisplayName="目标标记色"))
+    FLinearColor DebugColorGoal = FLinearColor::Red;
 
     // ── 运行时状态（只读）────────────────────────────────────────
 
@@ -135,6 +187,26 @@ public:
     // 获取格子中心世界坐标
     FVector GetCellCenter(FIntPoint Cell) const;
 
+    const TArray<FFlowFieldTrackedTarget>& GetTrackedTargets() const { return TrackedTargets; }
+
+    /**
+     * A* 寻路：在当前流场格子上找从 Start 到 Goal 的路径，返回世界坐标路径点数组。
+     * 空数组 = 无路径（障碍隔断或越界）。不依赖 bReady，只需格子已初始化。
+     * 开销远小于全图 BFS，适合动态目标（如追踪玩家）按需调用。
+     */
+    UFUNCTION(BlueprintCallable, Category="FlowField")
+    TArray<FVector> FindPath(FVector Start, FVector Goal) const;
+
+    // 查询某世界坐标是否是边界格（walkable 且紧邻障碍）
+    bool IsBorderCell(FVector WorldPos) const { return Grid.IsBorderCell(Grid.WorldToCell(WorldPos)); }
+
+    // 获取边界格预计算的面向方向（指向相邻障碍的平均方向，非边界格返回零向量）
+    FVector2D GetBorderFaceDir(FVector WorldPos) const { return Grid.GetBorderFaceDir(Grid.WorldToCell(WorldPos)); }
+
+    // 手动重新计算边界格（障碍销毁/添加后调用）
+    UFUNCTION(BlueprintCallable, CallInEditor, Category="FlowField")
+    void RebuildBorderCells() { Grid.ComputeBorderCells(); }
+
     // 找最近的可走格子（击退后脱困用）
     FIntPoint FindNearestWalkable(FVector WorldPos) const
     {
@@ -146,6 +218,10 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void Tick(float DeltaSeconds) override;
+    // 编辑器 Viewport 也 Tick（不需要 Play），用于相机跟踪调试绘制
+    virtual bool ShouldTickIfViewportsOnly() const override { return true; }
+    virtual void OnConstruction(const FTransform& Transform) override;
 
     UFUNCTION()
     void OnRep_CurrentGoal();
@@ -155,11 +231,30 @@ protected:
 
 #if WITH_EDITOR
     virtual void PostEditMove(bool bFinished) override;
+    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 
 private:
     FFlowFieldGrid Grid;
 
+    UPROPERTY()
+    UFlowFieldDebugComponent* DebugComp = nullptr;
+
+    // 相机跟踪：移动超过半格才重建
+    FVector LastDebugCamPos = FVector(FLT_MAX, FLT_MAX, FLT_MAX);
+    bool    bDebugDirty     = false;
+
+    // Debug 地面 Z 缓存（线迹只做一次，之后复用）
+    TArray<float> CachedDebugZ;
+    int32         CachedDebugW = 0;
+    int32         CachedDebugH = 0;
+
     void ApplyObstaclesToGrid(FFlowFieldGrid& TargetGrid);
-    void DrawDebug() const;
+    void RebuildDebugLines(FVector CamPos); // 构建线段数组 → UpdateLines
+    void RefreshDebugNow();                 // 立即取相机位置重建（编辑器用）
+
+    // 目标追踪
+    FTimerHandle TargetUpdateTimer;
+    TArray<FFlowFieldTrackedTarget> TrackedTargets;
+    void UpdateTarget(); // 找最近带 TargetTag 的 Actor → Generate
 };

@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "CoreMinimal.h"
+#include "Algo/Reverse.h"
 #include "FlowFieldTypes.h"
 
 struct FFlowFieldGrid
@@ -18,6 +19,8 @@ public:
         HotFlowDirs.Init(FVector2D::ZeroVector, Width * Height);
         HotIntegrations.Init(FLT_MAX, Width * Height);
         OccupancyMap.Init(0, Width * Height);
+        BorderCells.Init(0, Width * Height);
+        BorderFaceDirs.Init(FVector2D::ZeroVector, Width * Height);
     }
 
     // 清空所有数据
@@ -27,7 +30,57 @@ public:
         HotFlowDirs.Empty();
         HotIntegrations.Empty();
         OccupancyMap.Empty();
+        BorderCells.Empty();
+        BorderFaceDirs.Empty();
         Width = Height = 0;
+    }
+
+    // 预计算边界格：walkable 且8邻域内至少有一个 blocked 格
+    // 在 BuildFlowField 之后调用一次；障碍变化时手动重触发
+    // 预计算边界格及其面向方向（障碍邻格的平均方向），GenerateInternal 调用一次
+    void ComputeBorderCells()
+    {
+        BorderCells.Init(0, Width * Height);
+        BorderFaceDirs.Init(FVector2D::ZeroVector, Width * Height);
+
+        for (int32 Y = 0; Y < Height; Y++)
+        {
+            for (int32 X = 0; X < Width; X++)
+            {
+                if (GetCell(X, Y).IsBlocked()) continue;
+
+                FVector2D FaceSum = FVector2D::ZeroVector;
+                for (int32 DY = -1; DY <= 1; DY++)
+                {
+                    for (int32 DX = -1; DX <= 1; DX++)
+                    {
+                        if (DX == 0 && DY == 0) continue;
+                        if (!IsInBounds(X+DX, Y+DY)) continue;
+                        if (GetCell(X+DX, Y+DY).IsBlocked())
+                            FaceSum += FVector2D((float)DX, (float)DY).GetSafeNormal();
+                    }
+                }
+
+                if (!FaceSum.IsNearlyZero())
+                {
+                    BorderCells[Y * Width + X] = 1;
+                    BorderFaceDirs[Y * Width + X] = FaceSum.GetSafeNormal();
+                }
+            }
+        }
+    }
+
+    bool IsBorderCell(FIntPoint P) const
+    {
+        if (!IsInBounds(P)) return false;
+        return BorderCells[P.Y * Width + P.X] != 0;
+    }
+
+    // 获取边界格预计算的面向方向（指向相邻障碍格的平均方向）
+    FVector2D GetBorderFaceDir(FIntPoint P) const
+    {
+        if (!IsInBounds(P) || BorderCells[P.Y * Width + P.X] == 0) return FVector2D::ZeroVector;
+        return BorderFaceDirs[P.Y * Width + P.X];
     }
 
     // 网格是否已初始化且有效
@@ -145,17 +198,26 @@ public:
             return FVector2D::ZeroVector;
         };
 
-        FVector2D D00 = GetHotDir(X,     Y    );
-        FVector2D D10 = GetHotDir(X + 1, Y    );
-        FVector2D D01 = GetHotDir(X,     Y + 1);
-        FVector2D D11 = GetHotDir(X + 1, Y + 1);
+        // 双线性插值：障碍格方向为零，不参与加权，避免在墙角被拉偏
+        struct FSample { FVector2D Dir; float W; };
+        FSample Samples[4] = {
+            { GetHotDir(X,     Y    ), (1.f - FracX) * (1.f - FracY) },
+            { GetHotDir(X + 1, Y    ), FracX         * (1.f - FracY) },
+            { GetHotDir(X,     Y + 1), (1.f - FracX) * FracY         },
+            { GetHotDir(X + 1, Y + 1), FracX         * FracY         },
+        };
 
-        FVector2D Result = FMath::Lerp(
-            FMath::Lerp(D00, D10, FracX),
-            FMath::Lerp(D01, D11, FracX),
-            FracY
-        );
+        FVector2D Result = FVector2D::ZeroVector;
+        float     TotalW = 0.f;
+        for (const FSample& S : Samples)
+        {
+            if (S.Dir.IsNearlyZero()) continue; // 障碍或不可达，跳过
+            Result += S.Dir * S.W;
+            TotalW += S.W;
+        }
 
+        if (TotalW < KINDA_SMALL_NUMBER) return FVector::ZeroVector;
+        Result /= TotalW; // 重新归一化权重，消除障碍格的偏移影响
         if (Result.IsNearlyZero()) return FVector::ZeroVector;
         Result.Normalize();
         return FVector(Result.X, Result.Y, 0.f);
@@ -673,6 +735,116 @@ public:
             UE_LOG(LogTemp, Log, TEXT("[FlowField] SealEnclosedRegions: 封闭 %d 个格子"), SealedCount);
     }
 
+    // ── A* 寻路 ────────────────────────────────────────────────────
+    // 在当前格子（含障碍）上做 A* 寻路，返回格子坐标路径。
+    // 路径已精简（去掉方向不变的中间点），空数组 = 无路径。
+    bool FindPathAStar(FIntPoint Start, FIntPoint Goal, TArray<FIntPoint>& OutPath) const
+    {
+        OutPath.Reset();
+        if (!IsInBounds(Start) || !IsInBounds(Goal)) return false;
+        if (GetCell(Start.X, Start.Y).IsBlocked() || GetCell(Goal.X, Goal.Y).IsBlocked()) return false;
+        if (Start == Goal) { OutPath.Add(Start); return true; }
+
+        const int32 Total = Width * Height;
+
+        TArray<float>    GCost;  GCost.Init(FLT_MAX, Total);
+        TArray<FIntPoint> Parent; Parent.Init({-1,-1}, Total);
+        TArray<bool>      Closed; Closed.Init(false,   Total);
+
+        struct FNode
+        {
+            float    F;
+            FIntPoint P;
+            // 最小堆：F 小的优先（UE TArray heap 是最大堆，用大于使最小的排最前）
+            bool operator>(const FNode& O) const { return F > O.F; }
+        };
+        auto Pred = [](const FNode& A, const FNode& B){ return A.F > B.F; };
+
+        auto Heuristic = [](FIntPoint A, FIntPoint B) -> float
+        {
+            // Chebyshev（适合 8 方向移动）
+            const int32 DX = FMath::Abs(A.X - B.X);
+            const int32 DY = FMath::Abs(A.Y - B.Y);
+            return (float)FMath::Max(DX, DY) + 0.414f * (float)FMath::Min(DX, DY);
+        };
+
+        static const FIntPoint Dirs8[] = {
+            { 1, 0},{-1, 0},{ 0, 1},{ 0,-1},
+            { 1, 1},{ 1,-1},{-1, 1},{-1,-1}
+        };
+
+        TArray<FNode> Heap;
+        const int32 SI      = Start.Y * Width + Start.X;
+        GCost[SI]           = 0.f;
+        Heap.HeapPush({Heuristic(Start, Goal), Start}, Pred);
+
+        while (Heap.Num() > 0)
+        {
+            FNode Cur;
+            Heap.HeapPop(Cur, Pred);
+
+            const int32 CI = Cur.P.Y * Width + Cur.P.X;
+            if (Closed[CI]) continue;
+            Closed[CI] = true;
+
+            if (Cur.P == Goal)
+            {
+                // 回溯路径
+                FIntPoint P = Goal;
+                while (P.X >= 0)
+                {
+                    OutPath.Add(P);
+                    P = Parent[P.Y * Width + P.X];
+                }
+                Algo::Reverse(OutPath);
+                // 精简路径：去掉方向不变的中间点
+                if (OutPath.Num() > 2)
+                {
+                    TArray<FIntPoint> Slim;
+                    Slim.Add(OutPath[0]);
+                    for (int32 i = 1; i < OutPath.Num() - 1; i++)
+                    {
+                        FIntPoint D1 = OutPath[i]   - OutPath[i-1];
+                        FIntPoint D2 = OutPath[i+1] - OutPath[i];
+                        if (D1 != D2) Slim.Add(OutPath[i]);
+                    }
+                    Slim.Add(OutPath.Last());
+                    OutPath = MoveTemp(Slim);
+                }
+                return true;
+            }
+
+            for (const FIntPoint& D : Dirs8)
+            {
+                const int32 NX = Cur.P.X + D.X;
+                const int32 NY = Cur.P.Y + D.Y;
+                if (!IsInBounds(NX, NY)) continue;
+
+                const int32 NI = NY * Width + NX;
+                if (Closed[NI]) continue;
+                if (GetCell(NX, NY).IsBlocked()) continue;
+
+                // 对角线：两侧格子必须可走
+                if (D.X != 0 && D.Y != 0)
+                {
+                    const FFlowFieldCell* Ax = TryGetCell(Cur.P.X + D.X, Cur.P.Y);
+                    const FFlowFieldCell* Ay = TryGetCell(Cur.P.X, Cur.P.Y + D.Y);
+                    if (!Ax || Ax->IsBlocked()) continue;
+                    if (!Ay || Ay->IsBlocked()) continue;
+                }
+
+                const float MoveG = GCost[CI] + (D.X != 0 && D.Y != 0 ? 1.414f : 1.f);
+                if (MoveG < GCost[NI])
+                {
+                    GCost[NI]  = MoveG;
+                    Parent[NI] = Cur.P;
+                    Heap.HeapPush({MoveG + Heuristic({NX,NY}, Goal), {NX,NY}}, Pred);
+                }
+            }
+        }
+        return false; // 无路径
+    }
+
     int32 CountWalkable()  const { int32 N=0; for (auto& C : Cells) if (!C.IsBlocked())      N++; return N; }
     int32 CountReachable() const { int32 N=0; for (auto& C : Cells) if (C.IsReachable())     N++; return N; }
     int32 CountWithFlow()  const { int32 N=0; for (auto& C : Cells) if (!C.FlowDir.IsZero()) N++; return N; }
@@ -695,6 +867,8 @@ private:
     TArray<FVector2D>      HotFlowDirs;     // 热路径：缓存流场方向，避免逐帧访问 Cells
     TArray<float>          HotIntegrations; // 热路径：缓存 Integration，加速碰撞检测
     TArray<int32>          OccupancyMap;    // 每格当前 AI 占位计数
+    TArray<uint8>          BorderCells;     // 预计算边界格：walkable 且紧邻 blocked 格，值 1 表示边界
+    TArray<FVector2D>      BorderFaceDirs;  // 预计算边界格面向方向：紧邻障碍格方向的平均值
 
     // 将 Cells 中的 FlowDir 同步到热路径缓存
     void SyncHotFlowDirs()

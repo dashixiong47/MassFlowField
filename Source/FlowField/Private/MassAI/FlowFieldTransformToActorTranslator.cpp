@@ -58,14 +58,7 @@ void UFlowFieldTransformToActorTranslator::Execute(
             FVector  Location = Transform.GetLocation();
             FQuat    Rotation = Transform.GetRotation();
 
-            // 法线倾斜：用 MovementProcessor 已经平滑好的法线，主线程只做一次叉积
-            if (Agent.bSurfaceInitialized &&
-                !Agent.SmoothedNormal.Equals(FVector::UpVector, 0.01f))
-            {
-                FQuat SlopeRot = FQuat::FindBetweenNormals(
-                    FVector::UpVector, Agent.SmoothedNormal);
-                Rotation = SlopeRot * Rotation;
-            }
+            // 纯 Yaw，不做法线倾斜
             FVector Loc = Transform.GetLocation();
             UE_LOG(LogTemp, Verbose, TEXT("Setting actor %s to location %s"), *Actor->GetName(), *Loc.ToString());
             Actor->SetActorLocationAndRotation(

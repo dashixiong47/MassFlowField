@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+using System.IO;
 using UnrealBuildTool;
 
 public class FlowField : ModuleRules
@@ -7,6 +8,11 @@ public class FlowField : ModuleRules
 	public FlowField(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+
+		// ── RVO2 ThirdParty ───────────────────────────────────────
+		string RVO2Path = Path.Combine(ModuleDirectory, "ThirdParty/RVO2");
+		PrivateIncludePaths.Add(RVO2Path);
+		PublicDefinitions.Add("RVO_STATIC_DEFINE"); // 静态链接，禁用 dllimport/export
 
 		PublicDependencyModuleNames.AddRange(
 			new string[]
@@ -60,7 +66,8 @@ public class FlowField : ModuleRules
 					"ToolMenus",
 					"EditorStyle",
 					"Slate",
-					"SlateCore"
+					"SlateCore",
+					"Projects"
 				}
 			);
 		}

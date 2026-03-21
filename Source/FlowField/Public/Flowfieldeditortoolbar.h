@@ -22,6 +22,7 @@ public:
 
 	virtual void RegisterCommands() override;
 
+public:
 	TSharedPtr<FUICommandInfo> ScanObstacles;
 	TSharedPtr<FUICommandInfo> ClearObstacles;
 };
@@ -36,18 +37,23 @@ public:
 
 private:
 	void RegisterMenuExtensions();
+
+	// 下拉菜单
+	TSharedRef<SWidget> GenerateMenuContent();
+
+	// 功能
 	void OnScanObstacles();
 	void OnClearObstacles();
 
-	// 进度通知
+	// 通知
 	void ShowScanNotification(int32 Total);
 	void UpdateScanNotification(int32 Submitted, int32 Total);
 	void FinishScanNotification(int32 Placed);
 	void CancelScanNotification();
 
-	TSharedPtr<FUICommandList>    CommandList;
-	TWeakPtr<SNotificationItem>   ScanNotification;
-	FTimerHandle                  ProgressTimerHandle;
+private:
+	TSharedPtr<FUICommandList>  CommandList;
+	TWeakPtr<SNotificationItem> ScanNotification;
 };
 
 #endif // WITH_EDITOR
