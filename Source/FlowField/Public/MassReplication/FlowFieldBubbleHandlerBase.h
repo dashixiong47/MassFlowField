@@ -73,6 +73,8 @@ public:
         auto Update = [this](const FMassEntityView& View, const TAgentType& Item)
         {
             const FReplicatedAgentPositionYawData& P = Item.GetReplicatedPositionYawData();
+            const FVector Pos(P.GetPosition());
+            const float   Yaw = P.GetYaw();
 
             // 直接写入 FTransformFragment，确保客户端位置立即生效。
             // 不依赖 FFlowFieldAgentFragment 或 ClientInterpProcessor，
@@ -80,16 +82,16 @@ public:
             if (FTransformFragment* TF = View.GetFragmentDataPtr<FTransformFragment>())
             {
                 FTransform& T = TF->GetMutableTransform();
-                T.SetLocation(FVector(P.GetPosition()));
-                T.SetRotation(FQuat(FRotator(0.f, P.GetYaw(), 0.f)));
+                T.SetLocation(Pos);
+                T.SetRotation(FQuat(FVector::UpVector, FMath::DegreesToRadians(Yaw)));
             }
 
             // 如果实体有 FFlowFieldAgentFragment，额外写入校正目标供插值 Processor 平滑。
             if (FFlowFieldAgentFragment* Agent =
                     View.GetFragmentDataPtr<FFlowFieldAgentFragment>())
             {
-                Agent->CorrectionTargetLocation = FVector(P.GetPosition());
-                Agent->CorrectionTargetYaw      = P.GetYaw();
+                Agent->CorrectionTargetLocation = Pos;
+                Agent->CorrectionTargetYaw      = Yaw;
                 Agent->bHasCorrection           = true;
             }
 

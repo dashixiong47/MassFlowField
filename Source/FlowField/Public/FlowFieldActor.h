@@ -8,6 +8,8 @@
 #include "FlowFieldTargetComponent.h"
 #include "FlowFieldActor.generated.h"
 
+class UFlowFieldObstacleComponent;
+
 // 被追踪目标信息（由 UpdateTarget 定时缓存，供各 Processor 读取）
 struct FFlowFieldTrackedTarget
 {
@@ -31,16 +33,6 @@ public:
 
     // ── 目标追踪 ──────────────────────────────────────────────────
 
-    /** 带此 Tag 的 Actor 会被 AI 追踪（仅服务端生效）。空 Name 时停用自动追踪。 */
-    UPROPERTY(EditAnywhere, Category="FlowField|目标追踪",
-        meta=(DisplayName="追踪目标 Tag"))
-    FName TargetTag = FName("Player");
-
-    /** 无 UFlowFieldTargetComponent 时的默认追踪半径（cm）。目标超出此距离不追踪。 */
-    UPROPERTY(EditAnywhere, Category="FlowField|目标追踪",
-        meta=(ClampMin="0", DisplayName="默认追踪半径（cm）"))
-    float DefaultChaseRadius = 5000.f;
-
     /** 追踪目标更新间隔（s）。0.5 = 每秒更新两次流场目标。 */
     UPROPERTY(EditAnywhere, Category="FlowField|目标追踪",
         meta=(ClampMin="0.1", ClampMax="5.0", DisplayName="目标更新间隔（s）"))
@@ -61,18 +53,6 @@ public:
     UPROPERTY(EditAnywhere, Category="FlowField",
         meta=(ClampMin="0", DisplayName="最大台阶高度（cm）"))
     float MaxStepHeight = 45.f;
-
-    UPROPERTY(EditAnywhere, Category="FlowField",
-        meta=(DisplayName="障碍物 Tag"))
-    FName ObstacleTag = FName("FlowFieldObstacle");
-
-    UPROPERTY(EditAnywhere, Category="FlowField",
-        meta=(ClampMin="-500", ClampMax="500", DisplayName="障碍物扩展半径（cm）"))
-    float ObstacleRadius = 0.f;
-
-    UPROPERTY(EditAnywhere, Category="FlowField",
-        meta=(ClampMin="0.0", ClampMax="1.0", DisplayName="障碍物重叠阈值"))
-    float ObstacleOverlapThreshold = 0.5f;
 
     // ── 调试绘制 ──────────────────────────────────────────────────
 
@@ -189,6 +169,17 @@ public:
 
     const TArray<FFlowFieldTrackedTarget>& GetTrackedTargets() const { return TrackedTargets; }
 
+    // 目标注册接口（由 UFlowFieldTargetComponent 在 BeginPlay/EndPlay 调用）
+    void RegisterTarget(UFlowFieldTargetComponent* Comp);
+    void UnregisterTarget(UFlowFieldTargetComponent* Comp);
+
+    // 障碍物注册接口（由 UFlowFieldObstacleComponent 在 BeginPlay/EndPlay 调用）
+    void RegisterObstacle(UFlowFieldObstacleComponent* Comp);
+    void UnregisterObstacle(UFlowFieldObstacleComponent* Comp);
+
+    // 多线程 Processor 访问网格时使用此锁（读锁）
+    mutable FRWLock GridRWLock;
+
     /**
      * A* 寻路：在当前流场格子上找从 Start 到 Goal 的路径，返回世界坐标路径点数组。
      * 空数组 = 无路径（障碍隔断或越界）。不依赖 bReady，只需格子已初始化。
@@ -206,6 +197,9 @@ public:
     // 手动重新计算边界格（障碍销毁/添加后调用）
     UFUNCTION(BlueprintCallable, CallInEditor, Category="FlowField")
     void RebuildBorderCells() { Grid.ComputeBorderCells(); }
+
+    // 编辑器中重建障碍布局（由 UFlowFieldObstacleComponent 在属性变更/移动时调用）
+    void RefreshEditorObstacleLayout() { OnConstruction(GetActorTransform()); }
 
     // 找最近的可走格子（击退后脱困用）
     FIntPoint FindNearestWalkable(FVector WorldPos) const
@@ -250,11 +244,18 @@ private:
     int32         CachedDebugH = 0;
 
     void ApplyObstaclesToGrid(FFlowFieldGrid& TargetGrid);
+    void ApplySingleObstacleToGrid(FFlowFieldGrid& TargetGrid, UFlowFieldObstacleComponent* Comp);
+    void RebuildFlowAfterObstacleChange(); // 障碍变化后重建积分场+流场（保留地表数据）
     void RebuildDebugLines(FVector CamPos); // 构建线段数组 → UpdateLines
     void RefreshDebugNow();                 // 立即取相机位置重建（编辑器用）
 
     // 目标追踪
     FTimerHandle TargetUpdateTimer;
     TArray<FFlowFieldTrackedTarget> TrackedTargets;
-    void UpdateTarget(); // 找最近带 TargetTag 的 Actor → Generate
+    // 注册制：组件主动注册，避免每次 TActorIterator 全场扫描
+    TArray<TWeakObjectPtr<UFlowFieldTargetComponent>> RegisteredTargets;
+    void UpdateTarget(); // 刷新已注册目标的位置 → 更新 TrackedTargets
+
+    // 障碍物注册列表
+    TArray<TWeakObjectPtr<UFlowFieldObstacleComponent>> RegisteredObstacles;
 };

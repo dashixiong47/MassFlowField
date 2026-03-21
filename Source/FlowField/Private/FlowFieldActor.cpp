@@ -1,6 +1,7 @@
 ﻿#include "FlowFieldActor.h"
 #include "FlowFieldSubsystem.h"
 #include "FlowFieldObstacleActor.h"
+#include "FlowFieldObstacleComponent.h"
 #include "FlowFieldTargetComponent.h"
 #include "DrawDebugHelpers.h"
 #include "FlowFieldDebugComponent.h"
@@ -56,8 +57,8 @@ void AFlowFieldActor::BeginPlay()
     // 客户端初次加入时，CurrentGoal 可能已经有值但不触发 OnRep
     BeginPlay_Client();
 
-    // 服务端：若配置了 TargetTag，启动定时追踪
-    if (HasAuthority() && !TargetTag.IsNone())
+    // 服务端：启动定时追踪（目标由 UFlowFieldTargetComponent 注册）
+    if (HasAuthority())
     {
         GetWorldTimerManager().SetTimer(TargetUpdateTimer, this,
             &AFlowFieldActor::UpdateTarget,
@@ -238,7 +239,10 @@ void AFlowFieldActor::GenerateInternal(FVector GoalPos)
     }
 
     bReady = false;
-    Grid = MoveTemp(NewGrid);
+    {
+        FRWScopeLock WriteLock(GridRWLock, SLT_Write);
+        Grid = MoveTemp(NewGrid);
+    }
     bReady = true;
     Grid.ResetOccupancy();
 
@@ -252,49 +256,68 @@ void AFlowFieldActor::GenerateInternal(FVector GoalPos)
         (int32)GetWorld()->GetNetMode());
 }
 
+void AFlowFieldActor::ApplySingleObstacleToGrid(FFlowFieldGrid& TargetGrid, UFlowFieldObstacleComponent* Comp)
+{
+    if (!Comp || !Comp->GetOwner()) return;
+
+    FVector Origin, Extent;
+    Comp->GetOwner()->GetActorBounds(true, Origin, Extent);
+
+    const float ExpandX = Extent.X + Comp->Radius;
+    const float ExpandY = Extent.Y + Comp->Radius;
+
+    FIntPoint CellMin = TargetGrid.WorldToCell(FVector(Origin.X - ExpandX, Origin.Y - ExpandY, 0.f));
+    FIntPoint CellMax = TargetGrid.WorldToCell(FVector(Origin.X + ExpandX, Origin.Y + ExpandY, 0.f));
+
+    CellMin.X = FMath::Clamp(CellMin.X, 0, TargetGrid.Width  - 1);
+    CellMin.Y = FMath::Clamp(CellMin.Y, 0, TargetGrid.Height - 1);
+    CellMax.X = FMath::Clamp(CellMax.X, 0, TargetGrid.Width  - 1);
+    CellMax.Y = FMath::Clamp(CellMax.Y, 0, TargetGrid.Height - 1);
+
+    // 障碍物顶部 Z：低于地表说明是地面/地板平面，整体跳过
+    const float ObstacleTopZ = Origin.Z + Extent.Z;
+
+    Comp->BlockedCells.Reset();
+    int32 CellsMarked = 0;
+    for (int32 Y = CellMin.Y; Y <= CellMax.Y; ++Y)
+    for (int32 X = CellMin.X; X <= CellMax.X; ++X)
+    {
+        FFlowFieldCell& Cell = TargetGrid.GetCell(X, Y);
+        if (Cell.IsBlocked()) continue;
+
+        // 地表 Z 已知时：障碍物顶部需高于地表至少 MaxStepHeight，否则视为地面不阻断
+        if (Cell.SurfaceZ != 0.f && ObstacleTopZ < Cell.SurfaceZ + MaxStepHeight) continue;
+
+        Cell.Cost = 255;
+        Comp->BlockedCells.Add(FIntPoint(X, Y));
+        CellsMarked++;
+    }
+    UE_LOG(LogTemp, Log, TEXT("[FlowField] Obstacle '%s': ObstacleTopZ=%.0f, cells [%d,%d]-[%d,%d], marked=%d"),
+        *Comp->GetOwner()->GetName(), ObstacleTopZ,
+        CellMin.X, CellMin.Y, CellMax.X, CellMax.Y, CellsMarked);
+}
+
 void AFlowFieldActor::ApplyObstaclesToGrid(FFlowFieldGrid& TargetGrid)
 {
-    if (ObstacleTag.IsNone()) return;
+    UWorld* World = GetWorld();
+    if (!World) return;
 
-    int32 ObstacleCount = 0;
-    int32 CellsMarked   = 0;
-    float Half          = CellSize * 0.5f;
-
-    for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+    // 始终扫描场景（运行时 + 编辑器统一路径）：
+    // 避免 Generate() 在障碍物 BeginPlay() 之前调用导致遗漏，
+    // 同时正确跳过正在销毁的 Actor（UnregisterObstacle 触发的重建场景）。
+    for (TActorIterator<AActor> It(World); It; ++It)
     {
-        AActor* Actor = *It;
-        if (!Actor->ActorHasTag(ObstacleTag)) continue;
-
-        ObstacleCount++;
-
-        FVector Origin, Extent;
-        Actor->GetActorBounds(true, Origin, Extent);
-
-        float ExpandX = Extent.X + ObstacleRadius;
-        float ExpandY = Extent.Y + ObstacleRadius;
-
-        FIntPoint CellMin = TargetGrid.WorldToCell(FVector(Origin.X - ExpandX, Origin.Y - ExpandY, 0.f));
-        FIntPoint CellMax = TargetGrid.WorldToCell(FVector(Origin.X + ExpandX, Origin.Y + ExpandY, 0.f));
-
-        CellMin.X = FMath::Clamp(CellMin.X, 0, TargetGrid.Width  - 1);
-        CellMin.Y = FMath::Clamp(CellMin.Y, 0, TargetGrid.Height - 1);
-        CellMax.X = FMath::Clamp(CellMax.X, 0, TargetGrid.Width  - 1);
-        CellMax.Y = FMath::Clamp(CellMax.Y, 0, TargetGrid.Height - 1);
-
-        for (int32 Y = CellMin.Y; Y <= CellMax.Y; ++Y)
-        for (int32 X = CellMin.X; X <= CellMax.X; ++X)
-        {
-            FFlowFieldCell& Cell = TargetGrid.GetCell(X, Y);
-            if (!Cell.IsBlocked())
-            {
-                Cell.Cost = 255;
-                CellsMarked++;
-            }
-        }
+        AActor* A = *It;
+        if (!IsValid(A) || A->IsActorBeingDestroyed()) continue;
+        if (UFlowFieldObstacleComponent* Comp = A->FindComponentByClass<UFlowFieldObstacleComponent>())
+            ApplySingleObstacleToGrid(TargetGrid, Comp);
     }
+}
 
-    UE_LOG(LogTemp, Log, TEXT("[FlowField] ApplyObstacles: %d obstacles, %d cells marked"),
-        ObstacleCount, CellsMarked);
+void AFlowFieldActor::RebuildFlowAfterObstacleChange()
+{
+    if (!bReady || CurrentGoal.IsZero()) return;
+    GenerateInternal(CurrentGoal);
 }
 
 FVector AFlowFieldActor::GetFlowDirection(FVector WorldPos) const
@@ -585,9 +608,6 @@ void AFlowFieldActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
     // 网格/障碍参数变化：重新生成 obstacle 布局
     static const TArray<FName> GridProps = {
         GET_MEMBER_NAME_CHECKED(AFlowFieldActor, CellSize),
-        GET_MEMBER_NAME_CHECKED(AFlowFieldActor, ObstacleTag),
-        GET_MEMBER_NAME_CHECKED(AFlowFieldActor, ObstacleRadius),
-        GET_MEMBER_NAME_CHECKED(AFlowFieldActor, ObstacleOverlapThreshold),
     };
     const FName Changed = PropertyChangedEvent.GetPropertyName();
     if (GridProps.Contains(Changed))
@@ -630,28 +650,43 @@ TArray<FVector> AFlowFieldActor::FindPath(FVector Start, FVector Goal) const
     return Result;
 }
 
+void AFlowFieldActor::RegisterTarget(UFlowFieldTargetComponent* Comp)
+{
+    if (!Comp) return;
+    RegisteredTargets.AddUnique(Comp);
+}
+
+void AFlowFieldActor::UnregisterTarget(UFlowFieldTargetComponent* Comp)
+{
+    RegisteredTargets.RemoveSwap(Comp);
+}
+
 void AFlowFieldActor::UpdateTarget()
 {
-    UWorld* World = GetWorld();
-    if (!World || TargetTag.IsNone()) return;
-
     TrackedTargets.Reset();
 
-    // 优先：Actor 上挂了 UFlowFieldTargetComponent 且 ComponentTags 含 TargetTag
-    // 备用：Actor 本身带有 TargetTag（兼容旧用法）
-    for (TActorIterator<AActor> It(World); It; ++It)
+    for (int32 i = RegisteredTargets.Num() - 1; i >= 0; --i)
     {
-        AActor* Actor = *It;
-        if (!Actor) continue;
-
-        UFlowFieldTargetComponent* Comp =
-            Actor->FindComponentByClass<UFlowFieldTargetComponent>();
-
-        const bool bCompMatch  = Comp && Comp->ComponentTags.Contains(TargetTag);
-        const bool bActorMatch = !bCompMatch && Actor->ActorHasTag(TargetTag);
-        if (!bCompMatch && !bActorMatch) continue;
-
-        const float Radius = Comp ? Comp->ChaseRadius : DefaultChaseRadius;
-        TrackedTargets.Add({Actor->GetActorLocation(), Radius});
+        UFlowFieldTargetComponent* Comp = RegisteredTargets[i].Get();
+        if (!Comp || !Comp->GetOwner())
+        {
+            RegisteredTargets.RemoveAtSwap(i); // 清理已销毁的目标
+            continue;
+        }
+        TrackedTargets.Add({Comp->GetOwner()->GetActorLocation(), Comp->ChaseRadius});
     }
+}
+
+void AFlowFieldActor::RegisterObstacle(UFlowFieldObstacleComponent* Comp)
+{
+    if (!Comp) return;
+    RegisteredObstacles.AddUnique(Comp);
+}
+
+void AFlowFieldActor::UnregisterObstacle(UFlowFieldObstacleComponent* Comp)
+{
+    if (!Comp) return;
+    RegisteredObstacles.RemoveSwap(Comp);
+    // 障碍销毁时只重建流场（地表数据保留），触发精确格子更新
+    if (bReady) RebuildFlowAfterObstacleChange();
 }

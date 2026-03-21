@@ -19,7 +19,6 @@ UFlowFieldRVOProcessor::UFlowFieldRVOProcessor()
     ExecutionOrder.ExecuteBefore.Add(TEXT("FlowFieldMovementProcessor"));
     ExecutionFlags = (int32)(EProcessorExecutionFlags::Server | EProcessorExecutionFlags::Client | EProcessorExecutionFlags::Standalone);
     bAutoRegisterWithProcessingPhases = true;
-    bRequiresGameThreadExecution = true;
 }
 
 UFlowFieldRVOProcessor::~UFlowFieldRVOProcessor()
@@ -57,16 +56,20 @@ void UFlowFieldRVOProcessor::Execute(
     const float DeltaTime   = Context.GetDeltaTimeSeconds();
     if (DeltaTime <= 0.f) return;
 
+    // ── RVO 跳帧：非更新帧直接返回，MovementProcessor 复用上次速度 ──
+    FrameCounter++;
+    if (FrameCounter % FMath::Max(1, RVOUpdateInterval) != 0) return;
+    const float RVODeltaTime = DeltaTime * RVOUpdateInterval; // 补偿累计时间
+
     // ── 初始化模拟器 ─────────────────────────────────────────────
     if (!RVOSim)
     {
         RVOSim = new RVO::RVOSimulator();
-        // 默认参数（实体注册时可按半径覆盖）
-        // neighborDist=300cm  maxNeighbors=10  timeHorizon=0.5s
-        // timeHorizonObst=0.5s  radius=60cm  maxSpeed=400cm/s
-        RVOSim->setAgentDefaults(300.f, 10, 0.5f, 0.5f, 60.f, 400.f);
+        RVOSim->setAgentDefaults(200.f, 5, 0.5f, 0.5f, 60.f, 400.f);
     }
-    RVOSim->setTimeStep(DeltaTime);
+    RVOSim->setTimeStep(RVODeltaTime);
+
+    FRWScopeLock ReadLock(FlowActor->GridRWLock, SLT_ReadOnly);
 
     const FVector CurrentGoal    = FlowActor->CurrentGoal;
     const float   CellSize       = FlowActor->CellSize;
@@ -128,17 +131,13 @@ void UFlowFieldRVOProcessor::Execute(
                     // 目标在障碍内（攻城模式）：只用 bAtWall，让 AI 铺开包围整圈
                     // 目标在可走格：只用 bNearGoal
                     // 目标在可走格：只用 bNearGoal，靠近目标就停
-                    bool bAtWall = false;
-                    if (bGoalInObstacle && FlowActor->IsBorderCell(Pos))
-                    {
-                        const FVector GoalDir2D = (FlowActor->CurrentGoal - Pos).GetSafeNormal2D();
-                        if (!GoalDir2D.IsNearlyZero())
-                        {
-                            const bool bHalfBlocked = FlowActor->GetIntegration(Pos + GoalDir2D * (CellSize * 0.5f)) < 0.f;
-                            const bool bFullBlocked  = FlowActor->GetIntegration(Pos + GoalDir2D * CellSize)          < 0.f;
-                            bAtWall = bHalfBlocked || bFullBlocked;
-                        }
-                    }
+                    // 攻城停止判断：仅当积分值接近0（在目标障碍包围圈上）才停止。
+                    // 旧方案用"边界格 + 目标方向被遮挡"判断，会错误地把经过的中间障碍
+                    // 旁边的格子也判为停止位（中间障碍同样是边界格，同样遮挡目标方向）。
+                    // 积分=0 的格子是 BuildIntegrationFieldMulti 的 BFS 源点（Ring），
+                    // 即目标障碍的直接包围圈；被中间障碍挡住时积分仍然很高，不会误判。
+                    const float EntityIntegration = FlowActor->GetIntegration(Pos);
+                    const bool bAtWall = bGoalInObstacle && EntityIntegration >= 0.f && EntityIntegration < 2.f;
                     const bool bNearGoal  = !bGoalInObstacle && (FVector::DistSquared2D(Pos, EffectiveGoal) < StopDistSq);
                     const bool bStopped   = bNearGoal || bAtWall;
                     Agent.bInStopZone = bStopped;

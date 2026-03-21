@@ -13,7 +13,6 @@ UFlowFieldMovementProcessor::UFlowFieldMovementProcessor(): EntityQuery()
     ExecutionOrder.ExecuteBefore.Add(UE::Mass::ProcessorGroupNames::Representation);
     ExecutionFlags = (int32)(EProcessorExecutionFlags::Server | EProcessorExecutionFlags::Client | EProcessorExecutionFlags::Standalone);
     bAutoRegisterWithProcessingPhases = true;
-    bRequiresGameThreadExecution = true;
 }
 
 void UFlowFieldMovementProcessor::ConfigureQueries(
@@ -44,6 +43,8 @@ void UFlowFieldMovementProcessor::Execute(
     const bool  bFlowReady  = FlowSub->IsReady();
     const float DeltaTime   = Context.GetDeltaTimeSeconds();
 
+    FRWScopeLock ReadLock(FlowActor->GridRWLock, SLT_ReadOnly);
+
     EntityQuery.ForEachEntityChunk(Context,
         [&](FMassExecutionContext& ChunkContext)
         {
@@ -56,6 +57,7 @@ void UFlowFieldMovementProcessor::Execute(
                 FFlowFieldAgentFragment& Agent     = Agents[i];
                 FTransform&              Transform = Transforms[i].GetMutableTransform();
                 const FVector            Pos       = Transform.GetLocation();
+                FRotator                 CurRotator = Transform.GetRotation().Rotator();
 
                 // ── 击退 ─────────────────────────────────────────────
                 if (Agent.bIsKnockedBack)
@@ -70,8 +72,10 @@ void UFlowFieldMovementProcessor::Execute(
                             SafePos.Z = Agent.bSurfaceInitialized ? Agent.SmoothedSurfaceZ : Pos.Z;
                             Transform.SetLocation(SafePos);
                         }
-                        Agent.KnockbackVelocity = FVector::ZeroVector;
-                        Agent.bIsKnockedBack    = false;
+                        Agent.KnockbackVelocity    = FVector::ZeroVector;
+                        Agent.bIsKnockedBack       = false;
+                        Agent.RVOComputedVelocity  = FVector::ZeroVector;
+                        Agent.SmoothedMoveVelocity = FVector::ZeroVector;
                         continue;
                     }
 
@@ -98,7 +102,7 @@ void UFlowFieldMovementProcessor::Execute(
                         }
                         Transform.SetLocation(NewPos);
                         Transform.SetRotation(FMath::RInterpTo(
-                            Transform.GetRotation().Rotator(),
+                            CurRotator,
                             KBDir.ToOrientationRotator(), DeltaTime, 15.f).Quaternion());
                         Agent.KnockbackVelocity = FMath::VInterpTo(
                             Agent.KnockbackVelocity, FVector::ZeroVector,
@@ -122,7 +126,9 @@ void UFlowFieldMovementProcessor::Execute(
                     if (bGotSurface && (RawZ == 0.f || FMath::Abs(RawZ - Pos.Z) > 500.f))
                         bGotSurface = false;
 
-                    if (!bGotSurface && !Agent.bSurfaceInitialized)
+                    // 线迹只能在游戏线程执行；多线程模式下此 fallback 被跳过，
+                    // 依赖 ScanAndPlaceObstacles 预存的 SavedSurfaceZ 完成初始化。
+                    if (!bGotSurface && !Agent.bSurfaceInitialized && IsInGameThread())
                     {
                         FHitResult Hit;
                         if (World->LineTraceSingleByObjectType(
@@ -167,6 +173,9 @@ void UFlowFieldMovementProcessor::Execute(
                         Transform.SetLocation(SafePos);
                         UsePos = SafePos;
                     }
+                    // 清空 RVO 残留速度，防止下一帧被推回障碍
+                    Agent.RVOComputedVelocity  = FVector::ZeroVector;
+                    Agent.SmoothedMoveVelocity = FVector::ZeroVector;
                     // 用恢复后坐标朝向目标，避免旋转永远被 continue 跳过
                     const FVector RecoveryDir = (FlowActor->CurrentGoal - UsePos).GetSafeNormal2D();
                     const FVector TargetDir   = RecoveryDir.IsNearlyZero() ? Agent.CurrentDir : RecoveryDir;
@@ -176,7 +185,7 @@ void UFlowFieldMovementProcessor::Execute(
                             ? TargetDir
                             : FMath::VInterpTo(Agent.CurrentDir, TargetDir, DeltaTime, Agent.DirSmoothing).GetSafeNormal2D();
                         Transform.SetRotation(FMath::RInterpTo(
-                            Transform.GetRotation().Rotator(),
+                            CurRotator,
                             Agent.CurrentDir.ToOrientationRotator(),
                             DeltaTime, RotationInterpSpeed).Quaternion());
                     }
@@ -201,7 +210,7 @@ void UFlowFieldMovementProcessor::Execute(
                             ? FaceDir3D
                             : FMath::VInterpTo(Agent.CurrentDir, FaceDir3D, DeltaTime, Agent.DirSmoothing).GetSafeNormal2D();
                         Transform.SetRotation(FMath::RInterpTo(
-                            Transform.GetRotation().Rotator(),
+                            CurRotator,
                             Agent.CurrentDir.ToOrientationRotator(),
                             DeltaTime, RotationInterpSpeed).Quaternion());
                     }
@@ -211,6 +220,8 @@ void UFlowFieldMovementProcessor::Execute(
                 // ── 旋转方向 ─────────────────────────────────────────
                 // 行进中：流场方向为主；当流场方向背向目标（绕障碍物）时，
                 //         按背向程度混入目标方向，避免 AI 贴墙时面向后方
+                // 缓存一次，旋转计算和速度压缩共用，避免重复双线性插值
+                const FVector CachedFlowDir = FlowActor->GetFlowDirectionSmooth(Pos);
                 const FVector GoalDir2D = (FlowActor->CurrentGoal - Pos).GetSafeNormal2D();
                 FVector RotDir;
 
@@ -221,7 +232,7 @@ void UFlowFieldMovementProcessor::Execute(
                 }
                 else
                 {
-                    FVector FlowDir = FlowActor->GetFlowDirectionSmooth(Pos);
+                    FVector FlowDir = CachedFlowDir;
                     if (FlowDir.IsNearlyZero()) FlowDir = GoalDir2D;
                     if (FlowDir.IsNearlyZero()) FlowDir = Agent.CurrentDir;
 
@@ -240,7 +251,7 @@ void UFlowFieldMovementProcessor::Execute(
 
                 if (!Agent.CurrentDir.IsNearlyZero())
                     Transform.SetRotation(FMath::RInterpTo(
-                        Transform.GetRotation().Rotator(),
+                        CurRotator,
                         Agent.CurrentDir.ToOrientationRotator(),
                         DeltaTime, RotationInterpSpeed).Quaternion());
 
@@ -259,10 +270,9 @@ void UFlowFieldMovementProcessor::Execute(
                 // 追踪目标时跳过此检测（方向本就和流场相反，不应被压速）
                 if (!Agent.bInStopZone && !Agent.bChasingTarget) // 贴墙中不做被挤减速
                 {
-                    FVector FlowDir = FlowActor->GetFlowDirectionSmooth(Pos);
-                    if (!FlowDir.IsNearlyZero())
+                    if (!CachedFlowDir.IsNearlyZero())
                     {
-                        const float Alignment = FVector::DotProduct(MoveVel.GetSafeNormal2D(), FlowDir);
+                        const float Alignment = FVector::DotProduct(MoveVel.GetSafeNormal2D(), CachedFlowDir);
                         const float SpeedScale = FMath::GetMappedRangeValueClamped(
                             FVector2D(-1.f, 1.f), FVector2D(PushedMinSpeedScale, 1.f), Alignment);
                         MoveVel *= SpeedScale;

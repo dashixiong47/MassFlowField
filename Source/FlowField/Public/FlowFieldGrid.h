@@ -532,7 +532,8 @@ public:
         if (BorderObstacles.Num() == 0) return {};
 
         // 第三步：找障碍物外侧（不在目标区域内）的可达格子
-        TSet<int32> RingSet;
+        TArray<bool> RingSet;
+        RingSet.Init(false, Width * Height);
         TArray<FIntPoint> Ring;
         for (int32 Key : BorderObstacles)
         {
@@ -545,8 +546,8 @@ public:
                 int32 NK = N.Y * Width + N.X;
                 if (GoalRegion[NK]) continue;
                 if (GetCell(N.X, N.Y).IsBlocked()) continue;
-                if (RingSet.Contains(NK)) continue;
-                RingSet.Add(NK);
+                if (RingSet[NK]) continue;
+                RingSet[NK] = true;
                 Ring.Add(N);
             }
         }
@@ -599,7 +600,8 @@ public:
         }
 
         // 找障碍物外侧（不在目标区域）的可达格子
-        TSet<int32> RingSet;
+        TArray<bool> RingSet;
+        RingSet.Init(false, Width * Height);
         TArray<FIntPoint> Ring;
         for (int32 Key : NearObstacles)
         {
@@ -612,8 +614,8 @@ public:
                 int32 NK = N.Y * Width + N.X;
                 if (GoalRegion[NK]) continue;
                 if (GetCell(N.X, N.Y).IsBlocked()) continue;
-                if (RingSet.Contains(NK)) continue;
-                RingSet.Add(NK);
+                if (RingSet[NK]) continue;
+                RingSet[NK] = true;
                 Ring.Add(N);
             }
         }
@@ -641,7 +643,8 @@ public:
 
         static const FIntPoint Dirs4[] = {{1,0},{-1,0},{0,1},{0,-1}};
 
-        TSet<int32> RingSet; // 避免重复添加
+        TArray<bool> RingSet; // 避免重复添加
+        RingSet.Init(false, Width * Height);
 
         while (!Q.IsEmpty())
         {
@@ -659,9 +662,9 @@ public:
                 {
                     // 可达格子且紧贴障碍物，加入包围圈
                     int32 Key = N.Y * Width + N.X;
-                    if (!RingSet.Contains(Key))
+                    if (!RingSet[Key])
                     {
-                        RingSet.Add(Key);
+                        RingSet[Key] = true;
                         Ring.Add(N);
                     }
                 }

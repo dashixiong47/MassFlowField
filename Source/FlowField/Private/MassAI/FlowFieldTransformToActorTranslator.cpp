@@ -58,9 +58,6 @@ void UFlowFieldTransformToActorTranslator::Execute(
             FVector  Location = Transform.GetLocation();
             FQuat    Rotation = Transform.GetRotation();
 
-            // 纯 Yaw，不做法线倾斜
-            FVector Loc = Transform.GetLocation();
-            UE_LOG(LogTemp, Verbose, TEXT("Setting actor %s to location %s"), *Actor->GetName(), *Loc.ToString());
             Actor->SetActorLocationAndRotation(
                 Location, Rotation,
                 false, nullptr,

@@ -12,7 +12,6 @@ UFlowFieldClientInterpProcessor::UFlowFieldClientInterpProcessor()
     ExecutionOrder.ExecuteAfter.Add(TEXT("FlowFieldMovementProcessor"));
     ExecutionFlags = (int32)(EProcessorExecutionFlags::Client);
     bAutoRegisterWithProcessingPhases = true;
-    bRequiresGameThreadExecution = true;
 }
 
 void UFlowFieldClientInterpProcessor::ConfigureQueries(

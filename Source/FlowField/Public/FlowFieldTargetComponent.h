@@ -19,4 +19,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="FlowField",
         meta=(ClampMin="0", DisplayName="追踪半径（cm）"))
     float ChaseRadius = 3000.f;
+
+protected:
+    virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 };

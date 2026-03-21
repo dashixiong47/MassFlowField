@@ -35,9 +35,15 @@ public:
         DisplayName="普通目标停止距离倍率"))
     float NormalGoalStopRadiusMult = 0.6f;
 
+    /** RVO 每隔几帧执行一次（1=每帧，2=隔帧，3=每3帧）*/
+    UPROPERTY(EditAnywhere, Category="FlowField|RVO", meta=(ClampMin="1", ClampMax="6",
+        DisplayName="RVO 更新间隔（帧）"))
+    int32 RVOUpdateInterval = 3;
+
 private:
     FMassEntityQuery EntityQuery;
     RVO::RVOSimulator* RVOSim = nullptr;
+    int32 FrameCounter = 0;
 
     // 目标在障碍内时，缓存"目标最近可走点"，避免每帧每实体重复搜索
     FVector CachedGoalForEffective  = FVector(-99999999.f, -99999999.f, 0.f);
