@@ -45,6 +45,7 @@ private:
 	void OnScanObstacles();
 	void OnClearObstacles();
 	void OnCreateVATDataAsset();
+	void OnCreateAttackDataTable();
 
 	// 碰撞配置检测 & 修复
 	void OnMapOpenedForCollisionCheck(const FString& Filename, bool bAsTemplate);

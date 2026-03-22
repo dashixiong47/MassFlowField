@@ -12,6 +12,8 @@
 #include "FlowFieldStyle.h"
 #include "AssetToolsModule.h"
 #include "Factories/DataAssetFactory.h"
+#include "Factories/DataTableFactory.h"
+#include "FlowFieldAttackTypes.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "ContentBrowserModule.h"
 #include "IContentBrowserSingleton.h"
@@ -138,6 +140,14 @@ TSharedRef<SWidget> FFlowFieldEditorToolbar::GenerateMenuContent()
 	);
 
 	MenuBuilder.AddMenuSeparator();
+
+	// ✅ 创建攻击配置 DataTable
+	MenuBuilder.AddMenuEntry(
+		INVTEXT("Create Attack DataTable"),
+		INVTEXT("在内容浏览器中创建攻击配置 DataTable（行类型：FFlowFieldAttackRow）"),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.DataTable"),
+		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnCreateAttackDataTable))
+	);
 
 	// ✅ 创建 VAT DataAsset
 	MenuBuilder.AddMenuEntry(
@@ -504,6 +514,39 @@ void FFlowFieldEditorToolbar::OnCreateVATDataAsset()
 		GEditor->SyncBrowserToObjects(Assets);
 
 		// 打开详情编辑器
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewAsset);
+	}
+}
+
+void FFlowFieldEditorToolbar::OnCreateAttackDataTable()
+{
+	FContentBrowserModule& CBModule =
+		FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
+
+	TArray<FString> SelectedPaths;
+	CBModule.Get().GetSelectedPathViewFolders(SelectedPaths);
+	const FString PackagePath = SelectedPaths.Num() > 0 ? SelectedPaths[0] : TEXT("/Game");
+
+	IAssetTools& AssetTools =
+		FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+
+	FString AssetName, PackageName;
+	AssetTools.CreateUniqueAssetName(
+		PackagePath / TEXT("DT_AttackConfig"), TEXT(""), PackageName, AssetName
+	);
+
+	UDataTableFactory* Factory = NewObject<UDataTableFactory>();
+	Factory->Struct = FFlowFieldAttackRow::StaticStruct();
+
+	UObject* NewAsset = AssetTools.CreateAsset(
+		AssetName, PackagePath,
+		UDataTable::StaticClass(), Factory
+	);
+
+	if (NewAsset)
+	{
+		TArray<UObject*> Assets = { NewAsset };
+		GEditor->SyncBrowserToObjects(Assets);
 		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewAsset);
 	}
 }
