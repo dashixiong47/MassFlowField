@@ -76,6 +76,11 @@ struct FLOWFIELD_API FFlowFieldAgentFragment : public FMassFragment
     UPROPERTY() float   KnockbackDecay     = 5.f;                 // 衰减系数，越大停得越快
     UPROPERTY() bool    bIsKnockedBack     = false;               // 是否正在被击退
 
+    // ── 减速 / 眩晕（由 AttackProcessor 写入，MovementProcessor 读取）──
+    UPROPERTY() float   SlowFactor         = 1.f;   // 速度乘数，<1 时减速（1=正常）
+    UPROPERTY() float   SlowTimeRemaining  = 0.f;   // 减速剩余时间（s）
+    UPROPERTY() float   StunTimeRemaining  = 0.f;   // 眩晕剩余时间（s），>0 时停止主动移动
+
     // ── 追踪目标 ──────────────────────────────────────────────────
     UPROPERTY() bool    bAtWall         = false;               // 是否已贴附目标障碍物包围圈（攻城模式）
     UPROPERTY() bool    bChasingTarget  = false;               // 是否正在追踪动态目标

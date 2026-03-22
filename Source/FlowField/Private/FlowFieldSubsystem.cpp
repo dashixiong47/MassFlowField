@@ -120,30 +120,30 @@ bool UFlowFieldSubsystem::IsReady() const
 
 // ── 攻击系统转发 ──────────────────────────────────────────────────
 
-int32 UFlowFieldSubsystem::FireAttack(const FFlowFieldAttackConfig& Config)
-{
-    if (FlowFieldActor && FlowFieldActor->AttackComp)
-        return FlowFieldActor->AttackComp->FireAttack(Config);
-    return -1;
-}
+#define ATTACK_COMP (FlowFieldActor && FlowFieldActor->AttackComp)
+
+int32 UFlowFieldSubsystem::FireProjectile(const FFlowFieldProjectileConfig& Config)
+{ return ATTACK_COMP ? FlowFieldActor->AttackComp->FireProjectile(Config) : -1; }
+
+int32 UFlowFieldSubsystem::FireLaser(const FFlowFieldLaserConfig& Config)
+{ return ATTACK_COMP ? FlowFieldActor->AttackComp->FireLaser(Config) : -1; }
+
+int32 UFlowFieldSubsystem::FireChain(const FFlowFieldChainConfig& Config)
+{ return ATTACK_COMP ? FlowFieldActor->AttackComp->FireChain(Config) : -1; }
+
+int32 UFlowFieldSubsystem::FireExplosion(const FFlowFieldExplosionConfig& Config)
+{ return ATTACK_COMP ? FlowFieldActor->AttackComp->FireExplosion(Config) : -1; }
 
 void UFlowFieldSubsystem::CancelAttack(int32 AttackId)
-{
-    if (FlowFieldActor && FlowFieldActor->AttackComp)
-        FlowFieldActor->AttackComp->CancelAttack(AttackId);
-}
+{ if (ATTACK_COMP) FlowFieldActor->AttackComp->CancelAttack(AttackId); }
 
 void UFlowFieldSubsystem::KillAgent(int32 EntityId)
-{
-    if (FlowFieldActor && FlowFieldActor->AttackComp)
-        FlowFieldActor->AttackComp->KillAgent(EntityId);
-}
+{ if (ATTACK_COMP) FlowFieldActor->AttackComp->KillAgent(EntityId); }
 
 void UFlowFieldSubsystem::DestroyAgent(int32 EntityId)
-{
-    if (FlowFieldActor && FlowFieldActor->AttackComp)
-        FlowFieldActor->AttackComp->DestroyAgent(EntityId);
-}
+{ if (ATTACK_COMP) FlowFieldActor->AttackComp->DestroyAgent(EntityId); }
+
+#undef ATTACK_COMP
 
 // ── 击退 ──────────────────────────────────────────────────────────
 

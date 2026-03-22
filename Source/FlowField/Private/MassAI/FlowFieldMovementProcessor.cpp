@@ -160,6 +160,14 @@ void UFlowFieldMovementProcessor::Execute(
                     }
                 }
 
+                // ── 眩晕：停止主动移动，允许地面贴合已在上方处理 ────
+                if (Agent.StunTimeRemaining > 0.f)
+                {
+                    Agent.SmoothedMoveVelocity = FVector::ZeroVector;
+                    Agent.RVOComputedVelocity  = FVector::ZeroVector;
+                    continue;
+                }
+
                 // ── Layer 1：密度自适应惯性 ───────────────────────────
                 // 邻居越多，速度平滑速度越低（响应越慢 = 越重），防止单个 AI 推动整群
                 const float EffectiveSmoothSpeed = (Agent.CrowdDensityFullAt > 0 && Agent.LocalNeighborCount > 0)
@@ -174,6 +182,7 @@ void UFlowFieldMovementProcessor::Execute(
                         Agent.RVOComputedVelocity.SizeSquared2D() >
                         FMath::Square(Agent.MoveSpeed * VelocityDeadZonePct);
                     if (!Agent.bChasingTarget && !bHasVelocity) continue;
+                    if (Agent.StunTimeRemaining > 0.f) continue;
 
                     // 朝目标方向旋转
                     if (Agent.bChasingTarget && !Agent.ChaseTargetPos.IsZero())
@@ -212,6 +221,9 @@ void UFlowFieldMovementProcessor::Execute(
                             NoFlowVel.Y += (DY / Dist) * PushMag;
                         }
                     }
+
+                    if (Agent.SlowTimeRemaining > 0.f)
+                        NoFlowVel *= FMath::Clamp(Agent.SlowFactor, 0.f, 1.f);
 
                     if (NoFlowVel.SizeSquared2D() >
                         FMath::Square(Agent.MoveSpeed * VelocityDeadZonePct))
@@ -369,6 +381,10 @@ void UFlowFieldMovementProcessor::Execute(
                         MoveVel.Y += (DY / Dist) * PushMag;
                     }
                 }
+
+                // 减速：按 SlowFactor 缩放最终速度
+                if (Agent.SlowTimeRemaining > 0.f)
+                    MoveVel *= FMath::Clamp(Agent.SlowFactor, 0.f, 1.f);
 
                 // ── 移动 ─────────────────────────────────────────────
                 FVector NewPos = FVector(

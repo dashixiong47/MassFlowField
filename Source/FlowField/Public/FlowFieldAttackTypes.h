@@ -2,143 +2,288 @@
 #include "CoreMinimal.h"
 #include "FlowFieldAttackTypes.generated.h"
 
-// ── 枚举 ──────────────────────────────────────────────────────────
+// ── 自定义效果条目 ────────────────────────────────────────────
 
-UENUM(BlueprintType)
-enum class EFlowFieldAttackType : uint8
-{
-    Projectile  UMETA(DisplayName="飞行体"),
-    Laser       UMETA(DisplayName="激光"),
-    Explosion   UMETA(DisplayName="爆炸"),
-};
-
-UENUM(BlueprintType)
-enum class EFlowFieldLaserMode : uint8
-{
-    Straight    UMETA(DisplayName="直线"),
-    Fan         UMETA(DisplayName="扇形"),
-    Chain       UMETA(DisplayName="连锁"),
-};
-
-// ── 攻击配置（Blueprint 可读写）──────────────────────────────────
-
+/** 一条自定义效果，TypeId 由项目代码识别，Value/Duration 含义由项目自定义 */
 USTRUCT(BlueprintType)
-struct FLOWFIELD_API FFlowFieldAttackConfig
+struct FLOWFIELD_API FFlowFieldCustomEffectEntry
 {
     GENERATED_BODY()
 
-    // ── 基础 ──────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击")
-    EFlowFieldAttackType Type = EFlowFieldAttackType::Projectile;
+    /** 效果标识符，例如 "Freeze"、"Poison" */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="自定义效果",
+        meta=(DisplayName="效果标识符（TypeId）"))
+    FName TypeId;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|激光",
-        meta=(EditCondition="Type==EFlowFieldAttackType::Laser"))
-    EFlowFieldLaserMode LaserMode = EFlowFieldLaserMode::Straight;
+    /** 效果强度（由项目代码解释，例如减速倍率、毒伤量等） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="自定义效果",
+        meta=(DisplayName="效果强度（Value）"))
+    float Value = 0.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击")
-    FVector Origin = FVector::ZeroVector;
+    /** 效果持续时间（s），0 = 瞬发 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="自定义效果",
+        meta=(ClampMin="0", DisplayName="持续时间（s）"))
+    float Duration = 0.f;
+};
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击")
-    FVector Target = FVector::ZeroVector;
+// ── 攻击效果参数（伤害 + 内置状态效果 + 自定义扩展）────────────
 
-    /** 最大射程（cm）。激光线长 / 飞行体超出此距离自动销毁。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击",
-        meta=(ClampMin="1"))
-    float MaxRange = 3000.f;
+USTRUCT(BlueprintType)
+struct FLOWFIELD_API FFlowFieldEffectParams
+{
+    GENERATED_BODY()
 
-    /** 命中碰撞半径（cm）。飞行体球体半径 / 激光宽度 / 爆炸范围。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击",
-        meta=(ClampMin="1"))
-    float HitRadius = 60.f;
-
-    // ── 飞行体 ────────────────────────────────────────────────────
-    /** 飞行时间（s）。0 = 用 ProjectileSpeed 自动计算。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|飞行体",
-        meta=(ClampMin="0"))
-    float TravelTime = 0.f;
-
-    /** 飞行速度（cm/s）。TravelTime > 0 时忽略。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|飞行体",
-        meta=(ClampMin="1"))
-    float ProjectileSpeed = 1000.f;
-
-    // ── 激光 ──────────────────────────────────────────────────────
-    /** 视觉持续时间（s）。激光/爆炸伤害即时，但调试线 + OnAttackEnd 在此时间后触发。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|激光",
-        meta=(ClampMin="0"))
-    float VisualDuration = 0.15f;
-
-    /** 扇形总角度（°）。LaserMode=Fan 时生效。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|激光|扇形",
-        meta=(ClampMin="1", ClampMax="360"))
-    float FanAngle = 60.f;
-
-    /** 扇形射线数量。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|激光|扇形",
-        meta=(ClampMin="1", ClampMax="32"))
-    int32 FanRayCount = 5;
-
-    /** 连锁跳跃搜索半径（cm）。LaserMode=Chain 时，每次命中后在此半径内找下一目标。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|激光|连锁",
-        meta=(ClampMin="1"))
-    float ChainRadius = 400.f;
-
-    /** 最大连锁跳跃次数（含第一次命中）。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|激光|连锁",
-        meta=(ClampMin="1", ClampMax="20"))
-    int32 MaxChainCount = 3;
-
-    // ── 伤害 ──────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|伤害",
-        meta=(ClampMin="0"))
+    // ── 直接伤害 ──────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="伤害",
+        meta=(ClampMin="0", DisplayName="直接伤害"))
     float DirectDamage = 10.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|持续伤害",
-        meta=(ClampMin="0"))
+    // ── 持续伤害（DoT） ───────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="持续伤害",
+        meta=(ClampMin="0", DisplayName="DoT 每秒伤害"))
     float DotDamage = 0.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|持续伤害",
-        meta=(ClampMin="0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="持续伤害",
+        meta=(ClampMin="0", DisplayName="DoT 持续时间（s）"))
     float DotDuration = 0.f;
 
-    /** DoT 触发间隔（s）。每隔此时间派发一次 OnDoTTick 事件。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|持续伤害",
-        meta=(ClampMin="0.05"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="持续伤害",
+        meta=(ClampMin="0.05", DisplayName="DoT 触发间隔（s）"))
     float DotInterval = 0.5f;
 
-    // ── 击退 ──────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|击退",
-        meta=(ClampMin="0"))
-    float KnockbackStrength = 0.f;
+    // ── 击退 ──────────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="击退",
+        meta=(DisplayName="启用击退"))
+    bool bKnockback = false;
 
-    /** 击退生效半径（cm）。0 = 与 HitRadius 相同。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击|击退",
-        meta=(ClampMin="0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="击退",
+        meta=(ClampMin="0", EditCondition="bKnockback", DisplayName="击退力度（cm/s）"))
+    float KnockbackStrength = 500.f;
+
+    /** 0 = 与攻击的命中半径相同 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="击退",
+        meta=(ClampMin="0", EditCondition="bKnockback", DisplayName="击退范围（cm，0=同命中半径）"))
     float KnockbackRadius = 0.f;
 
-    // ── 行为 ──────────────────────────────────────────────────────
-    /** 穿透：命中后不停止，继续命中其他实体（不重复命中同一实体）。 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击")
+    // ── 减速 ──────────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="减速",
+        meta=(DisplayName="启用减速"))
+    bool bSlow = false;
+
+    /** 速度乘数：0=完全停止，0.5=半速（bSlow=true 时有效） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="减速",
+        meta=(ClampMin="0", ClampMax="0.99", EditCondition="bSlow", DisplayName="速度乘数（0=全停 0.5=半速）"))
+    float SlowFactor = 0.5f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="减速",
+        meta=(ClampMin="0.1", EditCondition="bSlow", DisplayName="减速持续时间（s）"))
+    float SlowDuration = 2.f;
+
+    // ── 眩晕 ──────────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="眩晕",
+        meta=(DisplayName="启用眩晕"))
+    bool bStun = false;
+
+    /** 眩晕持续时间（s），期间实体停止主动移动 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="眩晕",
+        meta=(ClampMin="0.1", EditCondition="bStun", DisplayName="眩晕持续时间（s）"))
+    float StunDuration = 1.f;
+
+    // ── 自定义效果 ────────────────────────────────────────────
+    /** 项目自定义效果列表，命中时通过 OnCustomEffect 委托广播给 BP */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="自定义效果",
+        meta=(DisplayName="自定义效果列表"))
+    TArray<FFlowFieldCustomEffectEntry> CustomEffects;
+};
+
+// ── 飞行体 ────────────────────────────────────────────────────
+
+USTRUCT(BlueprintType)
+struct FLOWFIELD_API FFlowFieldProjectileConfig
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(DisplayName="发射起点"))
+    FVector Origin = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(DisplayName="目标位置"))
+    FVector Target = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(ClampMin="1", DisplayName="命中半径（cm）"))
+    float HitRadius = 60.f;
+
+    /** 0 = 由飞行速度自动计算 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(ClampMin="0", DisplayName="飞行时间（s，0=自动）"))
+    float TravelTime = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(ClampMin="1", DisplayName="飞行速度（cm/s）"))
+    float ProjectileSpeed = 1000.f;
+
+    /** 1=单发，>1=扇形散射（霰弹枪） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(ClampMin="1", ClampMax="32", DisplayName="弹数（1=单发 >1=散弹）"))
+    int32 RayCount = 1;
+
+    /** 扇形总角度（°），RayCount > 1 时生效 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(ClampMin="1", ClampMax="180", EditCondition="RayCount>1", DisplayName="散射角度（°）"))
+    float FanAngle = 30.f;
+
+    /** 穿透：命中后继续飞行，不重复命中同一实体 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(DisplayName="穿透"))
     bool bPiercing = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(DisplayName="效果"))
+    FFlowFieldEffectParams Effects;
+};
+
+// ── 激光（直线 / 扇形） ──────────────────────────────────────
+
+USTRUCT(BlueprintType)
+struct FLOWFIELD_API FFlowFieldLaserConfig
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(DisplayName="发射起点"))
+    FVector Origin = FVector::ZeroVector;
+
+    /** 方向目标点，射线沿此方向延伸到最大射程 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(DisplayName="方向目标点"))
+    FVector Target = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(ClampMin="1", DisplayName="最大射程（cm）"))
+    float MaxRange = 3000.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(ClampMin="1", DisplayName="命中半径（cm）"))
+    float HitRadius = 60.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(ClampMin="0", DisplayName="视觉持续时间（s）"))
+    float VisualDuration = 0.15f;
+
+    /** 1=直线，>1=扇形展开 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(ClampMin="1", ClampMax="32", DisplayName="射线数量（1=直线 >1=扇形）"))
+    int32 RayCount = 1;
+
+    /** 扇形总角度（°），RayCount > 1 时生效 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(ClampMin="1", ClampMax="360", EditCondition="RayCount>1", DisplayName="扇形角度（°）"))
+    float FanAngle = 60.f;
+
+    /** 穿透：每条射线命中多个目标 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(DisplayName="穿透"))
+    bool bPiercing = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光",
+        meta=(DisplayName="效果"))
+    FFlowFieldEffectParams Effects;
+};
+
+// ── 连锁激光 ──────────────────────────────────────────────────
+
+USTRUCT(BlueprintType)
+struct FLOWFIELD_API FFlowFieldChainConfig
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(DisplayName="发射起点"))
+    FVector Origin = FVector::ZeroVector;
+
+    /** 第一跳方向目标点 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(DisplayName="第一跳目标点"))
+    FVector Target = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(ClampMin="1", DisplayName="第一跳最大射程（cm）"))
+    float MaxRange = 3000.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(ClampMin="1", DisplayName="命中半径（cm）"))
+    float HitRadius = 60.f;
+
+    /** 每次跳跃时搜索下一目标的半径 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(ClampMin="1", DisplayName="跳跃搜索半径（cm）"))
+    float ChainRadius = 400.f;
+
+    /** 最大连锁跳数（含第一次命中） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(ClampMin="1", ClampMax="20", DisplayName="最大跳数"))
+    int32 MaxChainCount = 3;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(ClampMin="0", DisplayName="视觉持续时间（s）"))
+    float VisualDuration = 0.15f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(DisplayName="效果"))
+    FFlowFieldEffectParams Effects;
+};
+
+// ── 爆炸 ──────────────────────────────────────────────────────
+
+USTRUCT(BlueprintType)
+struct FLOWFIELD_API FFlowFieldExplosionConfig
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="爆炸",
+        meta=(DisplayName="爆炸中心"))
+    FVector Center = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="爆炸",
+        meta=(ClampMin="1", DisplayName="爆炸半径（cm）"))
+    float Radius = 300.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="爆炸",
+        meta=(ClampMin="0", DisplayName="视觉持续时间（s）"))
+    float VisualDuration = 0.15f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="爆炸",
+        meta=(DisplayName="效果"))
+    FFlowFieldEffectParams Effects;
 };
 
 // ── 运行时内部状态（非 USTRUCT，不需要 UHT）────────────────────
 
-/** 空间哈希缓存 — 每帧在 AttackProcessor 中重建，O(1) 插入 + O(局部范围) 查询 */
+enum class EFlowFieldAttackTypeTag : uint8
+{
+    Projectile,
+    Laser,
+    Chain,
+    Explosion,
+};
+
+/** 空间哈希缓存 — 每帧在 AttackProcessor 中重建 */
 struct FFlowFieldSpatialCache
 {
     struct FEntry
     {
         int32     EntityId;
         FVector2D Pos2D;
-        AActor*   Actor; // VAT 实体为 nullptr
+        AActor*   Actor;
     };
 
     static constexpr float kCellSize    = 300.f;
     static constexpr float kInvCellSize = 1.f / kCellSize;
 
-    TMap<uint64, TArray<int32>> Grid;   // cell → Entry 索引列表
-    TArray<FEntry>               All;   // 所有实体扁平数组
+    TMap<uint64, TArray<int32>> Grid;
+    TArray<FEntry>               All;
 
     void Reset(int32 Reserve = 0)
     {
@@ -156,7 +301,6 @@ struct FFlowFieldSpatialCache
         Grid.FindOrAdd(Key(CX, CY)).Add(Idx);
     }
 
-    /** 球形查询（2D） */
     void QueryRadius(FVector Center, float Radius, TArray<const FEntry*>& Out) const
     {
         const int32 MinCX = FMath::FloorToInt((Center.X - Radius) * kInvCellSize);
@@ -181,7 +325,6 @@ struct FFlowFieldSpatialCache
         }
     }
 
-    /** 线段胶囊查询（2D） */
     void QueryLine(FVector A, FVector B, float Radius, TArray<const FEntry*>& Out) const
     {
         const float MinX = FMath::Min(A.X, B.X) - Radius;
@@ -234,35 +377,62 @@ private:
     }
 };
 
-/** 活跃攻击运行时状态 */
+/** 活跃攻击运行时状态（所有类型统一） */
 struct FFlowFieldActiveAttack
 {
-    int32                  AttackId     = -1;
-    FFlowFieldAttackConfig Config;
-    bool                   bActive      = true;
+    int32                  AttackId  = -1;
+    EFlowFieldAttackTypeTag Type     = EFlowFieldAttackTypeTag::Projectile;
+    bool                   bActive  = true;
+    bool                   bPiercing = false;
     float                  ElapsedTime  = 0.f;
-    float                  TotalTime    = 0.f;  // 飞行体：计算后的总飞行时间
+    float                  VisualDuration = 0.15f;
 
-    // 飞行体：当前位置
-    FVector                CurrentPos   = FVector::ZeroVector;
-    // 穿透：已命中实体集合（O(1) 查询）
-    TSet<int32>            HitEntityIds;
+    // 伤害参数（从 Config 展平，避免持有 Config 引用）
+    float DirectDamage    = 0.f;
+    float DotDamage       = 0.f;
+    float DotDuration     = 0.f;
+    float DotInterval     = 0.5f;
+    bool  bKnockback      = false;
+    float KnockbackStrength = 0.f;
+    float KnockbackRadius   = 0.f;
+    float HitRadius         = 60.f;
 
-    // 激光直线：实际终点（命中非穿透时截断，调试绘制用）
-    FVector                LaserEnd     = FVector::ZeroVector;
-    // 激光连锁 / 扇形：路径点（调试绘制用）
-    TArray<FVector>        DebugPath;
+    // 飞行体
+    FVector Origin       = FVector::ZeroVector;
+    FVector Target       = FVector::ZeroVector; // 飞行体目标 / 爆炸中心 / 激光方向
+    float   TotalTime    = 1.f;
+    FVector CurrentPos   = FVector::ZeroVector;
 
-    // 激光/爆炸：是否已完成命中检测（只处理一次）
-    bool                   bHitProcessed = false;
+    // 连锁
+    float   MaxRange     = 3000.f;
+    float   ChainRadius  = 400.f;
+    int32   MaxChainCount = 3;
+
+    // 减速
+    bool  bSlow         = false;
+    float SlowFactor    = 0.5f;
+    float SlowDuration  = 2.f;
+
+    // 眩晕
+    bool  bStun         = false;
+    float StunDuration  = 1.f;
+
+    // 自定义效果
+    TArray<FFlowFieldCustomEffectEntry> CustomEffects;
+
+    // 穿透：已命中实体集合
+    TSet<int32>     HitEntityIds;
+
+    // 激光/连锁路径（[0]=Origin，[1..N]=各射线/跳跃终点，调试+命中截断用）
+    TArray<FVector> DebugPath;
 };
 
-/** DoT（持续伤害）条目，按实体 ID 聚合到 Map 中 */
+/** DoT 条目，按实体 ID 聚合 */
 struct FFlowFieldDoTEntry
 {
-    int32 AttackId       = -1;
-    float DamagePerSec   = 0.f;
-    float TimeRemaining  = 0.f;
-    float DotInterval    = 0.5f;
-    float IntervalTimer  = 0.f;  // 从 DotInterval 开始，第一帧即触发
+    int32 AttackId      = -1;
+    float DamagePerSec  = 0.f;
+    float TimeRemaining = 0.f;
+    float DotInterval   = 0.5f;
+    float IntervalTimer = 0.f;
 };

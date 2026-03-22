@@ -90,23 +90,34 @@ public:
 
     // ── 攻击系统 ──────────────────────────────────────────────────
 
-    /** 发起攻击，返回 AttackId。config 中 Type 决定飞行体/激光/爆炸。 */
-    UFUNCTION(BlueprintCallable, Category="FlowField|攻击")
-    int32 FireAttack(const FFlowFieldAttackConfig& Config);
+    /** 发射飞行子弹，沿直线飞向目标，返回 AttackId */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击",
+        meta=(DisplayName="发射飞行体（子弹）"))
+    int32 FireProjectile(const FFlowFieldProjectileConfig& Config);
 
-    /** 提前取消攻击（触发 OnAttackEnd）。 */
-    UFUNCTION(BlueprintCallable, Category="FlowField|攻击")
+    /** 发射激光：RayCount=1 直线，RayCount>1 扇形，返回 AttackId */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击",
+        meta=(DisplayName="发射激光（直线/扇形）"))
+    int32 FireLaser(const FFlowFieldLaserConfig& Config);
+
+    /** 发射连锁闪电，依次跳跃命中最近目标，返回 AttackId */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击",
+        meta=(DisplayName="发射连锁激光"))
+    int32 FireChain(const FFlowFieldChainConfig& Config);
+
+    /** 触发范围爆炸，立即对半径内所有目标造成伤害，返回 AttackId */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击",
+        meta=(DisplayName="触发爆炸"))
+    int32 FireExplosion(const FFlowFieldExplosionConfig& Config);
+
+    /** 提前取消攻击（会触发 OnAttackEnd 事件） */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击",
+        meta=(DisplayName="取消攻击"))
     void CancelAttack(int32 AttackId);
 
-    /**
-     * 将实体标记为死亡（添加 DeadTag，停止移动/RVO）。
-     * bAutoDestroy=true 时在 DeathLingerTime 后自动销毁；
-     * bAutoDestroy=false 时需手动调用 DestroyAgent。
-     */
     UFUNCTION(BlueprintCallable, Category="FlowField|死亡")
     void KillAgent(int32 EntityId);
 
-    /** 立即销毁 Mass 实体（广播 OnEntityDestroyed 后移除）。 */
     UFUNCTION(BlueprintCallable, Category="FlowField|死亡")
     void DestroyAgent(int32 EntityId);
 
