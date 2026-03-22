@@ -115,6 +115,19 @@ void FFlowFieldEditorToolbar::Unregister()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 辅助：刷新当前世界的攻击表缓存（PIE 内也有效）
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void ReloadAttackTableInCurrentWorld()
+{
+	if (!GEditor) return;
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	if (!World) return;
+	if (UFlowFieldSubsystem* Sub = World->GetSubsystem<UFlowFieldSubsystem>())
+		Sub->LoadAttackTable();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Menu
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -149,6 +162,14 @@ TSharedRef<SWidget> FFlowFieldEditorToolbar::GenerateMenuContent()
 		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnCreateAttackDataTable))
 	);
 
+	// ✅ 重载攻击表缓存（DataTable 行修改后无需重启）
+	MenuBuilder.AddMenuEntry(
+		INVTEXT("Reload Attack Table"),
+		INVTEXT("重新从 DataTable 加载攻击配置到运行时缓存，修改行数据后点此生效"),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Refresh"),
+		FUIAction(FExecuteAction::CreateStatic(&ReloadAttackTableInCurrentWorld))
+	);
+
 	// ✅ 创建 VAT DataAsset
 	MenuBuilder.AddMenuEntry(
 		INVTEXT("Create VAT DataAsset"),
@@ -174,11 +195,12 @@ TSharedRef<SWidget> FFlowFieldEditorToolbar::GenerateMenuContent()
 		SettingsDetailsView = PropEditor.CreateDetailView(Args);
 		SettingsDetailsView->SetObject(GetMutableDefault<UFlowFieldSettings>());
 
-		// 属性改变后立即写入 ini，否则只改了内存 CDO
+		// 属性改变后：写入 ini + 刷新运行时攻击表缓存（无需重启 PIE）
 		SettingsDetailsView->OnFinishedChangingProperties().AddLambda(
 			[](const FPropertyChangedEvent&)
 			{
 				GetMutableDefault<UFlowFieldSettings>()->SaveConfig();
+				ReloadAttackTableInCurrentWorld();
 			});
 	}
 
