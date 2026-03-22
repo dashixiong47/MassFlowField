@@ -10,8 +10,9 @@ class AFlowFieldClientBubbleInfo;
 /**
  * ProjectSettings → Game → FlowField AI
  * 项目层在此填入自定义子类，插件运行时读取，无需修改插件代码。
+ * 配置存储在 Config/DefaultFlowField.ini。
  */
-UCLASS(Config = Game, DefaultConfig,
+UCLASS(Config = FlowField, DefaultConfig,
 	   meta = (DisplayName = "FlowField AI Settings"))
 class FLOWFIELD_API UFlowFieldSettings : public UDeveloperSettings
 {

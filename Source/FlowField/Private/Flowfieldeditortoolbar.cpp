@@ -173,6 +173,13 @@ TSharedRef<SWidget> FFlowFieldEditorToolbar::GenerateMenuContent()
 
 		SettingsDetailsView = PropEditor.CreateDetailView(Args);
 		SettingsDetailsView->SetObject(GetMutableDefault<UFlowFieldSettings>());
+
+		// 属性改变后立即写入 ini，否则只改了内存 CDO
+		SettingsDetailsView->OnFinishedChangingProperties().AddLambda(
+			[](const FPropertyChangedEvent&)
+			{
+				GetMutableDefault<UFlowFieldSettings>()->SaveConfig();
+			});
 	}
 
 	MenuBuilder.AddWidget(
