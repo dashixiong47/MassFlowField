@@ -72,9 +72,11 @@ struct FLOWFIELD_API FFlowFieldAgentFragment : public FMassFragment
     UPROPERTY() bool    bHasCorrection           = false;
 
     // ── 击退 ──────────────────────────────────────────────────────
-    UPROPERTY() FVector KnockbackVelocity  = FVector::ZeroVector; // 当前击退速度（cm/s）
-    UPROPERTY() float   KnockbackDecay     = 5.f;                 // 衰减系数，越大停得越快
-    UPROPERTY() bool    bIsKnockedBack     = false;               // 是否正在被击退
+    UPROPERTY() FVector KnockbackVelocity         = FVector::ZeroVector; // 当前击退速度（cm/s）
+    UPROPERTY() float   KnockbackDecay            = 5.f;                 // 衰减系数，越大停得越快
+    UPROPERTY() bool    bIsKnockedBack            = false;               // 是否正在被击退
+    UPROPERTY() float   KnockbackStaggerDuration  = 0.f;                 // 击退结束后停顿总时长（s）
+    UPROPERTY() float   KnockbackStaggerRemaining = 0.f;                 // 停顿剩余时间倒计时（s）
 
     // ── 减速 / 眩晕（由 AttackProcessor 写入，MovementProcessor 读取）──
     UPROPERTY() float   SlowFactor         = 1.f;   // 速度乘数，<1 时减速（1=正常）

@@ -126,11 +126,12 @@ public:
     UFUNCTION(BlueprintCallable, Category="FlowField|击退")
     void ApplyKnockback(FVector WorldPos, float Radius,
                         FVector Direction, float Force,
-                        float DecaySpeed = 5.f);
+                        float DecaySpeed = 5.f, float StaggerDuration = 0.f);
 
     UFUNCTION(BlueprintCallable, Category="FlowField|击退")
     void ApplyExplosionKnockback(FVector WorldPos, float Radius,
-                                  float Force, float DecaySpeed = 5.f);
+                                  float Force, float DecaySpeed = 5.f,
+                                  float StaggerDuration = 0.f);
 
     // ── Obstacle scanning ─────────────────────────────────────────
 

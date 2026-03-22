@@ -65,6 +65,11 @@ struct FLOWFIELD_API FFlowFieldEffectParams
         meta=(ClampMin="0", EditCondition="bKnockback", DisplayName="击退范围（cm，0=同命中半径）"))
     float KnockbackRadius = 0.f;
 
+    /** 击退结束后的停顿时间（s）；0 = 击退结束立即恢复移动 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="击退",
+        meta=(ClampMin="0", EditCondition="bKnockback", DisplayName="击退后停顿时间（s，0=立即恢复）"))
+    float KnockbackStaggerDuration = 0.5f;
+
     // ── 减速 ──────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="减速",
         meta=(DisplayName="启用减速"))

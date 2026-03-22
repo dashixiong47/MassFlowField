@@ -72,7 +72,8 @@ static void ApplyHit(
     // 击退
     if (Attack.bKnockback && FlowSub)
         FlowSub->ApplyExplosionKnockback(HitPos,
-            Attack.KnockbackRadius, Attack.KnockbackStrength);
+            Attack.KnockbackRadius, Attack.KnockbackStrength,
+            5.f, Attack.KnockbackStaggerDuration);
 
     // 减速（取最强一次：Factor 越小越强）
     if (Attack.bSlow && Attack.SlowDuration > 0.f)

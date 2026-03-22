@@ -149,7 +149,7 @@ void UFlowFieldSubsystem::DestroyAgent(int32 EntityId)
 
 void UFlowFieldSubsystem::ApplyKnockback(FVector WorldPos, float Radius,
                                          FVector Direction, float Force,
-                                         float DecaySpeed)
+                                         float DecaySpeed, float StaggerDuration)
 {
 	UWorld* World = GetWorld();
 	if (!World || World->GetNetMode() == NM_Client) return;
@@ -192,7 +192,7 @@ void UFlowFieldSubsystem::ApplyKnockback(FVector WorldPos, float Radius,
 	if (Targets.IsEmpty()) return;
 
 	EM->Defer().PushCommand<FMassDeferredSetCommand>(
-		[Targets, KBVelocity, DecaySpeed](FMassEntityManager& Manager)
+		[Targets, KBVelocity, DecaySpeed, StaggerDuration](FMassEntityManager& Manager)
 		{
 			for (const auto& T : Targets)
 			{
@@ -200,15 +200,17 @@ void UFlowFieldSubsystem::ApplyKnockback(FVector WorldPos, float Radius,
 				FMassEntityView View(Manager, T.Key);
 				FFlowFieldAgentFragment* Agent = View.GetFragmentDataPtr<FFlowFieldAgentFragment>();
 				if (!Agent) continue;
-				Agent->KnockbackVelocity = KBVelocity * T.Value;
-				Agent->KnockbackDecay = DecaySpeed;
-				Agent->bIsKnockedBack = true;
+				Agent->KnockbackVelocity        = KBVelocity * T.Value;
+				Agent->KnockbackDecay           = DecaySpeed;
+				Agent->bIsKnockedBack           = true;
+				Agent->KnockbackStaggerDuration = StaggerDuration;
 			}
 		});
 }
 
 void UFlowFieldSubsystem::ApplyExplosionKnockback(FVector WorldPos, float Radius,
-                                                  float Force, float DecaySpeed)
+                                                  float Force, float DecaySpeed,
+                                                  float StaggerDuration)
 {
 	UWorld* World = GetWorld();
 	if (!World || World->GetNetMode() == NM_Client) return;
@@ -265,7 +267,7 @@ void UFlowFieldSubsystem::ApplyExplosionKnockback(FVector WorldPos, float Radius
 	if (Targets.IsEmpty()) return;
 
 	EM->Defer().PushCommand<FMassDeferredSetCommand>(
-		[Targets, Force, DecaySpeed](FMassEntityManager& Manager)
+		[Targets, Force, DecaySpeed, StaggerDuration](FMassEntityManager& Manager)
 		{
 			for (const FKBTarget& T : Targets)
 			{
@@ -273,9 +275,10 @@ void UFlowFieldSubsystem::ApplyExplosionKnockback(FVector WorldPos, float Radius
 				FMassEntityView View(Manager, T.Handle);
 				FFlowFieldAgentFragment* Agent = View.GetFragmentDataPtr<FFlowFieldAgentFragment>();
 				if (!Agent) continue;
-				Agent->KnockbackVelocity = T.RadialDir * Force * T.DistRatio;
-				Agent->KnockbackDecay = DecaySpeed;
-				Agent->bIsKnockedBack = true;
+				Agent->KnockbackVelocity        = T.RadialDir * Force * T.DistRatio;
+				Agent->KnockbackDecay           = DecaySpeed;
+				Agent->bIsKnockedBack           = true;
+				Agent->KnockbackStaggerDuration = StaggerDuration;
 			}
 		});
 }

@@ -82,7 +82,6 @@ void UFlowFieldMovementProcessor::Execute(
 
                     if (Agent.KnockbackVelocity.SizeSquared2D() > 1.f)
                     {
-                        FVector KBDir  = Agent.KnockbackVelocity.GetSafeNormal2D();
                         FVector NewPos = FVector(
                             Pos.X + Agent.KnockbackVelocity.X * DeltaTime,
                             Pos.Y + Agent.KnockbackVelocity.Y * DeltaTime,
@@ -102,9 +101,7 @@ void UFlowFieldMovementProcessor::Execute(
                             }
                         }
                         Transform.SetLocation(NewPos);
-                        Transform.SetRotation(FMath::RInterpTo(
-                            CurRotator,
-                            KBDir.ToOrientationRotator(), DeltaTime, 15.f).Quaternion());
+                        // 击退期间不改变朝向，AI 始终面向追踪目标
                         Agent.KnockbackVelocity = FMath::VInterpTo(
                             Agent.KnockbackVelocity, FVector::ZeroVector,
                             DeltaTime, Agent.KnockbackDecay);
@@ -113,6 +110,8 @@ void UFlowFieldMovementProcessor::Execute(
                     {
                         Agent.KnockbackVelocity = FVector::ZeroVector;
                         Agent.bIsKnockedBack    = false;
+                        // 击退结束，启动停顿计时
+                        Agent.KnockbackStaggerRemaining = Agent.KnockbackStaggerDuration;
                     }
                     continue;
                 }
@@ -158,6 +157,16 @@ void UFlowFieldMovementProcessor::Execute(
                                 Agent.SmoothedSurfaceZ, RawZ, DeltaTime, Agent.SurfaceZSmoothSpeed);
                         }
                     }
+                }
+
+                // ── 击退后停顿：AI 静止直至计时结束 ─────────────────
+                if (Agent.KnockbackStaggerRemaining > 0.f)
+                {
+                    Agent.KnockbackStaggerRemaining = FMath::Max(
+                        0.f, Agent.KnockbackStaggerRemaining - DeltaTime);
+                    Agent.SmoothedMoveVelocity = FVector::ZeroVector;
+                    Agent.RVOComputedVelocity  = FVector::ZeroVector;
+                    continue;
                 }
 
                 // ── 眩晕：停止主动移动，允许地面贴合已在上方处理 ────
