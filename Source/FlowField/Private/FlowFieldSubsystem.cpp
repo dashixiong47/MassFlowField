@@ -57,6 +57,9 @@ void UFlowFieldSubsystem::PostInitialize()
 
 	// Spawn 由项目层 Subsystem 负责（如 MonsterManager）
 	// 插件只注册，不 Spawn
+
+	// 加载攻击配置表
+	LoadAttackTable();
 }
 
 // ── RegisterActor ─────────────────────────────────────────────────
@@ -556,4 +559,98 @@ void UFlowFieldSubsystem::ClearObstacleActors()
 	FlushDebugStrings(World);
 
 	UE_LOG(LogTemp, Log, TEXT("[FlowFieldSubsystem] ClearObstacleActors: baked obstacles cleared"));
+}
+
+// ── 攻击 DataTable 接口 ────────────────────────────────────────────
+
+void UFlowFieldSubsystem::LoadAttackTable()
+{
+	AttackCache.Empty();
+	const UFlowFieldSettings* Settings = UFlowFieldSettings::Get();
+	if (Settings->DefaultAttackTable.IsNull()) return;
+
+	UDataTable* Table = Settings->DefaultAttackTable.LoadSynchronous();
+	if (!Table) return;
+
+	Table->ForeachRow<FFlowFieldAttackRow>(TEXT("LoadAttackTable"),
+		[this](const FName& Key, const FFlowFieldAttackRow& Row)
+		{
+			AttackCache.Add(Key, Row);
+		});
+}
+
+int32 UFlowFieldSubsystem::FireAttack(FName RowId, FVector From, FVector To)
+{
+	const FFlowFieldAttackRow* Row = AttackCache.Find(RowId);
+	if (!Row) return -1;
+
+	switch (Row->Type)
+	{
+	case EFlowFieldAttackTypeTag::Projectile:
+	{
+		FFlowFieldProjectileConfig Cfg;
+		Cfg.Origin          = From;
+		Cfg.Target          = To;
+		Cfg.HitRadius       = Row->HitRadius;
+		Cfg.TravelTime      = Row->TravelTime;
+		Cfg.ProjectileSpeed = Row->ProjectileSpeed;
+		Cfg.RayCount        = Row->RayCount;
+		Cfg.FanAngle        = Row->FanAngle;
+		Cfg.bPiercing       = Row->bPiercing;
+		Cfg.Effects         = Row->Effects;
+		return FireProjectile(Cfg);
+	}
+	case EFlowFieldAttackTypeTag::Laser:
+	{
+		FFlowFieldLaserConfig Cfg;
+		Cfg.Origin          = From;
+		Cfg.Target          = To;
+		Cfg.MaxRange        = Row->MaxRange;
+		Cfg.HitRadius       = Row->HitRadius;
+		Cfg.VisualDuration  = Row->VisualDuration;
+		Cfg.RayCount        = Row->RayCount;
+		Cfg.FanAngle        = Row->FanAngle;
+		Cfg.bPiercing       = Row->bPiercing;
+		Cfg.Effects         = Row->Effects;
+		return FireLaser(Cfg);
+	}
+	case EFlowFieldAttackTypeTag::Chain:
+	{
+		FFlowFieldChainConfig Cfg;
+		Cfg.Origin         = From;
+		Cfg.Target         = To;
+		Cfg.MaxRange       = Row->MaxRange;
+		Cfg.HitRadius      = Row->HitRadius;
+		Cfg.ChainRadius    = Row->ChainRadius;
+		Cfg.MaxChainCount  = Row->MaxChainCount;
+		Cfg.VisualDuration = Row->VisualDuration;
+		Cfg.Effects        = Row->Effects;
+		return FireChain(Cfg);
+	}
+	case EFlowFieldAttackTypeTag::Explosion:
+	{
+		FFlowFieldExplosionConfig Cfg;
+		Cfg.Center         = From;
+		Cfg.Radius         = Row->ExplosionRadius;
+		Cfg.VisualDuration = Row->VisualDuration;
+		Cfg.Effects        = Row->Effects;
+		return FireExplosion(Cfg);
+	}
+	default: return -1;
+	}
+}
+
+void UFlowFieldSubsystem::SetAttackRow(FName RowId, const FFlowFieldAttackRow& Row)
+{
+	AttackCache.Add(RowId, Row);
+}
+
+bool UFlowFieldSubsystem::GetAttackRow(FName RowId, FFlowFieldAttackRow& OutRow) const
+{
+	if (const FFlowFieldAttackRow* Found = AttackCache.Find(RowId))
+	{
+		OutRow = *Found;
+		return true;
+	}
+	return false;
 }

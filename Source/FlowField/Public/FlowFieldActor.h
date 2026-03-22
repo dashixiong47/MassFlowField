@@ -70,68 +70,6 @@ public:
         meta=(DisplayName="扫描模式"))
     EFlowFieldScanMode ScanMode = EFlowFieldScanMode::TopDown;
 
-    // ── 调试绘制 ──────────────────────────────────────────────────
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试",
-        meta=(DisplayName="绘制网格"))
-    bool bDrawGrid = false;
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试",
-        meta=(DisplayName="绘制流场方向"))
-    bool bDrawFlow = true;
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试",
-        meta=(DisplayName="绘制热力图"))
-    bool bDrawHeatmap = true;
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试",
-        meta=(DisplayName="箭头缩放"))
-    float ArrowScale = 0.4f;
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试",
-        meta=(ClampMin="500", ClampMax="50000", DisplayName="调试绘制距离（cm）"))
-    float DebugDrawDistance = 5000.f;
-
-    /** 绘制每个目标的推挤范围（黄色圆圈），范围 = PushRadius */
-    UPROPERTY(EditAnywhere, Category="FlowField|调试",
-        meta=(DisplayName="绘制目标推挤范围"))
-    bool bDrawTargetRanges = false;
-
-    /** 绘制每个 AI 实体的感知范围（青色圆圈），受 DebugDrawDistance 距离剔除 */
-    UPROPERTY(EditAnywhere, Category="FlowField|调试",
-        meta=(DisplayName="绘制 AI 感知范围"))
-    bool bDrawAgentRanges = false;
-
-    // ── 调试颜色 ──────────────────────────────────────────────────
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
-        meta=(DisplayName="热力图近端色（Integration=0）"))
-    FLinearColor DebugHeatLow  = FLinearColor(0.f, 1.f, 0.f);  // 绿
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
-        meta=(DisplayName="热力图远端色（Integration=Max）"))
-    FLinearColor DebugHeatHigh = FLinearColor(1.f, 0.f, 0.f);  // 红
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
-        meta=(DisplayName="无流场时填充色"))
-    FLinearColor DebugColorNoFlow = FLinearColor(0.47f, 0.47f, 0.47f); // 灰
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
-        meta=(DisplayName="障碍格轮廓色"))
-    FLinearColor DebugColorObstacle = FLinearColor(0.9f, 0.15f, 0.1f); // 红
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
-        meta=(DisplayName="可走格轮廓色"))
-    FLinearColor DebugColorWalkable = FLinearColor(0.1f, 0.7f, 0.15f); // 绿
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
-        meta=(DisplayName="流场箭头色"))
-    FLinearColor DebugColorArrow = FLinearColor::White;
-
-    UPROPERTY(EditAnywhere, Category="FlowField|调试|颜色",
-        meta=(DisplayName="目标标记色"))
-    FLinearColor DebugColorGoal = FLinearColor::Red;
-
     // ── 运行时状态（只读）────────────────────────────────────────
 
     // 当前目标位置，服务端设置后自动复制到客户端触发重新生成

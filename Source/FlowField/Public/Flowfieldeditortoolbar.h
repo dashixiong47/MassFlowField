@@ -62,6 +62,9 @@ private:
 	TSharedPtr<FUICommandList>  CommandList;
 	TWeakPtr<SNotificationItem> ScanNotification;
 	TWeakPtr<SNotificationItem> CollisionConfigNotification;
+
+	// 设置面板（懒创建，下拉菜单里复用）
+	TSharedPtr<class IDetailsView> SettingsDetailsView;
 };
 
 #endif // WITH_EDITOR

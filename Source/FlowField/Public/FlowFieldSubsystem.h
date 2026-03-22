@@ -115,6 +115,28 @@ public:
         meta=(DisplayName="取消攻击"))
     void CancelAttack(int32 AttackId);
 
+    // ── 攻击 DataTable 接口 ────────────────────────────────────────
+
+    /** 从 DefaultAttackTable（UFlowFieldSettings）加载所有行到缓存，BeginPlay 自动调用 */
+    void LoadAttackTable();
+
+    /**
+     * 统一开火接口，从缓存读取 RowId 对应的配置并开火。
+     * From/To 语义：Projectile/Laser/Chain=起点+方向目标点；Explosion=爆炸中心（To 忽略）。
+     * 返回 AttackId，失败返回 -1。
+     */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击",
+        meta=(DisplayName="开火（DataTable 配置）"))
+    int32 FireAttack(FName RowId, FVector From, FVector To);
+
+    /** 运行时替换缓存中的某行（不影响 DataTable 资产本身） */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击")
+    void SetAttackRow(FName RowId, const FFlowFieldAttackRow& Row);
+
+    /** 获取缓存中的某行（找不到返回 false） */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击")
+    bool GetAttackRow(FName RowId, FFlowFieldAttackRow& OutRow) const;
+
     UFUNCTION(BlueprintCallable, Category="FlowField|死亡")
     void KillAgent(int32 EntityId);
 
@@ -156,6 +178,9 @@ private:
 
     // 击退用 Query，懒初始化
     FMassEntityQuery KnockbackQuery;
+
+    // 攻击配置缓存（从 DefaultAttackTable 加载）
+    TMap<FName, FFlowFieldAttackRow> AttackCache;
 
     void SubmitNextBatch();
     void FinalizeScan();

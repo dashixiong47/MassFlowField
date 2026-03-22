@@ -69,7 +69,8 @@ public class FlowField : ModuleRules
 					"SlateCore",
 					"Projects",
 					"AssetTools",
-					"ContentBrowser"
+					"ContentBrowser",
+					"PropertyEditor"
 				}
 			);
 		}

@@ -1,5 +1,6 @@
 #pragma once
 #include "CoreMinimal.h"
+#include "Engine/DataTable.h"
 #include "FlowFieldAttackTypes.generated.h"
 
 // ── 自定义效果条目 ────────────────────────────────────────────
@@ -264,15 +265,90 @@ struct FLOWFIELD_API FFlowFieldExplosionConfig
     FFlowFieldEffectParams Effects;
 };
 
-// ── 运行时内部状态（非 USTRUCT，不需要 UHT）────────────────────
+// ── 攻击类型枚举 ──────────────────────────────────────────────────
 
+UENUM(BlueprintType)
 enum class EFlowFieldAttackTypeTag : uint8
 {
-    Projectile,
-    Laser,
-    Chain,
-    Explosion,
+    Projectile  UMETA(DisplayName="飞行体"),
+    Laser       UMETA(DisplayName="激光"),
+    Chain       UMETA(DisplayName="连锁"),
+    Explosion   UMETA(DisplayName="爆炸"),
 };
+
+// ── DataTable 攻击行（统一配置格式）────────────────────────────
+
+/** 攻击 DataTable 行，Type 决定使用哪组参数；Origin/Target 由 FireAttack 调用时传入 */
+USTRUCT(BlueprintType)
+struct FLOWFIELD_API FFlowFieldAttackRow : public FTableRowBase
+{
+    GENERATED_BODY()
+
+    // ── 攻击类型 ─────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="攻击",
+        meta=(DisplayName="攻击类型"))
+    EFlowFieldAttackTypeTag Type = EFlowFieldAttackTypeTag::Projectile;
+
+    // ── 共享参数 ──────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="共享",
+        meta=(ClampMin="1", DisplayName="命中半径（cm）"))
+    float HitRadius = 60.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="共享",
+        meta=(ClampMin="0", DisplayName="视觉持续时间（s）"))
+    float VisualDuration = 0.15f;
+
+    /** 穿透：命中后不停止，不重复命中同一实体 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="共享",
+        meta=(DisplayName="穿透"))
+    bool bPiercing = false;
+
+    // ── 飞行体专属 ────────────────────────────────────────────
+    /** 0=由速度自动计算 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(ClampMin="0", DisplayName="飞行时间（s，0=自动）"))
+    float TravelTime = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体",
+        meta=(ClampMin="1", DisplayName="飞行速度（cm/s）"))
+    float ProjectileSpeed = 1000.f;
+
+    // ── 飞行体 / 激光共享 ─────────────────────────────────────
+    /** 1=单发/直线，>1=扇形 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体|激光",
+        meta=(ClampMin="1", ClampMax="32", DisplayName="弹/线数量（1=单发）"))
+    int32 RayCount = 1;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="飞行体|激光",
+        meta=(ClampMin="1", ClampMax="360", DisplayName="扇形角度（°）"))
+    float FanAngle = 30.f;
+
+    // ── 激光 / 连锁专属 ───────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="激光|连锁",
+        meta=(ClampMin="1", DisplayName="最大射程（cm）"))
+    float MaxRange = 3000.f;
+
+    // ── 连锁专属 ──────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(ClampMin="1", DisplayName="跳跃搜索半径（cm）"))
+    float ChainRadius = 400.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="连锁",
+        meta=(ClampMin="1", ClampMax="20", DisplayName="最大跳数"))
+    int32 MaxChainCount = 3;
+
+    // ── 爆炸专属 ──────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="爆炸",
+        meta=(ClampMin="1", DisplayName="爆炸半径（cm）"))
+    float ExplosionRadius = 300.f;
+
+    // ── 效果（伤害 + 内置状态 + 自定义扩展）─────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="效果",
+        meta=(DisplayName="攻击效果"))
+    FFlowFieldEffectParams Effects;
+};
+
+// ── 运行时内部状态（非 USTRUCT，不需要 UHT）────────────────────
 
 /** 空间哈希缓存 — 每帧在 AttackProcessor 中重建 */
 struct FFlowFieldSpatialCache
@@ -397,10 +473,11 @@ struct FFlowFieldActiveAttack
     float DotDamage       = 0.f;
     float DotDuration     = 0.f;
     float DotInterval     = 0.5f;
-    bool  bKnockback      = false;
-    float KnockbackStrength = 0.f;
-    float KnockbackRadius   = 0.f;
-    float HitRadius         = 60.f;
+    bool  bKnockback             = false;
+    float KnockbackStrength      = 0.f;
+    float KnockbackRadius        = 0.f;
+    float KnockbackStaggerDuration = 0.f;
+    float HitRadius              = 60.f;
 
     // 飞行体
     FVector Origin       = FVector::ZeroVector;

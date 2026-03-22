@@ -4,6 +4,7 @@
 #include "FlowFieldObstacleComponent.h"
 #include "FlowFieldSubsystem.h"
 #include "FlowFieldActor.h"
+#include "FlowFieldSettings.h"
 #include "MassExecutionContext.h"
 #include "MassEntityManager.h"
 #include "MassCommonFragments.h"
@@ -58,8 +59,9 @@ void UFlowFieldBehaviorProcessor::Execute(
     const TArray<TWeakObjectPtr<UFlowFieldObstacleComponent>>& RegObstacles = FlowActor->GetRegisteredObstacles();
 
     // 调试绘制：预取相机位置（距离剔除用）
-    const bool bDrawAgents = FlowActor->bDrawAgentRanges;
-    const float DrawDistSq = FMath::Square(FlowActor->DebugDrawDistance);
+    const UFlowFieldSettings* FFSettings = UFlowFieldSettings::Get();
+    const bool bDrawAgents = FFSettings->bDrawAgentRanges;
+    const float DrawDistSq = FMath::Square(FFSettings->DebugDrawDistance);
     FVector CamPos = FVector::ZeroVector;
     if (bDrawAgents)
     {

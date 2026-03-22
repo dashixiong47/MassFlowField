@@ -17,9 +17,10 @@ void UFlowFieldAttackComponent::FillEffects(FFlowFieldActiveAttack& A,
     A.DotDuration       = E.DotDuration;
     A.DotInterval       = FMath::Max(E.DotInterval, 0.05f);
     // 击退
-    A.bKnockback        = E.bKnockback;
-    A.KnockbackStrength = E.KnockbackStrength;
-    A.KnockbackRadius   = E.KnockbackRadius > 0.f ? E.KnockbackRadius : HitRadius;
+    A.bKnockback               = E.bKnockback;
+    A.KnockbackStrength        = E.KnockbackStrength;
+    A.KnockbackRadius          = E.KnockbackRadius > 0.f ? E.KnockbackRadius : HitRadius;
+    A.KnockbackStaggerDuration = E.KnockbackStaggerDuration;
     // 减速
     A.bSlow             = E.bSlow;
     A.SlowFactor        = FMath::Clamp(E.SlowFactor, 0.f, 0.99f);

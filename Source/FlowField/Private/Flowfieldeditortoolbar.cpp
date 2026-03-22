@@ -4,6 +4,7 @@
 
 #include "FlowFieldSubsystem.h"
 #include "FlowFieldActor.h"
+#include "FlowFieldSettings.h"
 #include "VAT/FlowFieldVATDataAsset.h"
 #include "ToolMenus.h"
 #include "Editor.h"
@@ -16,6 +17,8 @@
 #include "IContentBrowserSingleton.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "PropertyEditorModule.h"
+#include "IDetailsView.h"
 
 #define LOCTEXT_NAMESPACE "FlowField"
 
@@ -142,6 +145,35 @@ TSharedRef<SWidget> FFlowFieldEditorToolbar::GenerateMenuContent()
 		INVTEXT("在内容浏览器中创建 FlowFieldVATDataAsset"),
 		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.DataAsset"),
 		FUIAction(FExecuteAction::CreateRaw(this, &FFlowFieldEditorToolbar::OnCreateVATDataAsset))
+	);
+
+	MenuBuilder.AddMenuSeparator();
+
+	// 懒创建 DetailsView（只创建一次，重复打开下拉菜单时复用）
+	if (!SettingsDetailsView.IsValid())
+	{
+		FPropertyEditorModule& PropEditor =
+			FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
+
+		FDetailsViewArgs Args;
+		Args.bAllowSearch              = false;
+		Args.bHideSelectionTip         = true;
+		Args.bShowPropertyMatrixButton = false;
+		Args.NameAreaSettings          = FDetailsViewArgs::HideNameArea;
+
+		SettingsDetailsView = PropEditor.CreateDetailView(Args);
+		SettingsDetailsView->SetObject(GetMutableDefault<UFlowFieldSettings>());
+	}
+
+	MenuBuilder.AddWidget(
+		SNew(SBox)
+		.MinDesiredWidth(320.f)
+		.MaxDesiredHeight(500.f)
+		[
+			SettingsDetailsView.ToSharedRef()
+		],
+		FText::GetEmpty(),
+		true   // bNoIndent
 	);
 
 	return MenuBuilder.MakeWidget();

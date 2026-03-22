@@ -1,5 +1,6 @@
 ﻿#include "FlowFieldActor.h"
 #include "FlowFieldSubsystem.h"
+#include "FlowFieldSettings.h"
 #include "FlowFieldObstacleActor.h"
 #include "FlowFieldObstacleComponent.h"
 #include "FlowFieldTargetComponent.h"
@@ -133,8 +134,10 @@ void AFlowFieldActor::Tick(float DeltaSeconds)
         Comp->CurrentSpeedMultiplier = FMath::Lerp(1.f, Comp->MaxSlowdownFactor, Frac);
     }
 
+    const UFlowFieldSettings* S = UFlowFieldSettings::Get();
+
     // ── 调试：追踪范围平面圆（地面投影，黄色）────────────────────
-    if (bDrawTargetRanges)
+    if (S->bDrawTargetRanges)
     {
         UWorld* W = GetWorld();
         for (const FFlowFieldTrackedTarget& T : TrackedTargets)
@@ -145,7 +148,7 @@ void AFlowFieldActor::Tick(float DeltaSeconds)
     }
 
     // 没有任何调试开关打开时跳过网格/流场调试
-    if (!bDrawGrid && !bDrawFlow && !bDrawHeatmap) return;
+    if (!S->bDrawGrid && !S->bDrawFlow && !S->bDrawHeatmap) return;
     if (!Grid.IsValid()) return;
 
     // 取相机位置
@@ -177,7 +180,7 @@ void AFlowFieldActor::Tick(float DeltaSeconds)
     }
 
     // 追踪目标范围球（黄色，每帧绘制 0 duration = 单帧持续）
-    if (bDrawTargetRanges)
+    if (S->bDrawTargetRanges)
     {
         UWorld* W = GetWorld();
         for (const FFlowFieldTrackedTarget& T : TrackedTargets)
@@ -526,11 +529,13 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
     UWorld* World = GetWorld();
     if (!World) return;
 
+    const UFlowFieldSettings* S = UFlowFieldSettings::Get();
+
     const float MaxInteg      = Grid.MaxIntegration();
     const float Half          = Grid.CellSize * 0.5f;
     const float ZOff          = 8.f;
-    const float MaxDrawDistSq = DebugDrawDistance * DebugDrawDistance;
-    const bool  bAnyDebug     = bDrawGrid || bDrawHeatmap || bDrawFlow;
+    const float MaxDrawDistSq = S->DebugDrawDistance * S->DebugDrawDistance;
+    const bool  bAnyDebug     = S->bDrawGrid || S->bDrawHeatmap || S->bDrawFlow;
 
     // ── 顶点网格 Z 缓存 ──────────────────────────────────────────────────────
     // 用 (W+1)×(H+1) 顶点网格替代 per-cell 单点线迹 + 法线平面投影。
@@ -570,7 +575,7 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
     TArray<FFlowFieldDebugLine> Lines;
     TArray<FFlowFieldDebugQuad> Quads;
     Lines.Reserve(Grid.Width * Grid.Height * 6);
-    if (bDrawHeatmap) Quads.Reserve(Grid.Width * Grid.Height);
+    if (S->bDrawHeatmap) Quads.Reserve(Grid.Width * Grid.Height);
 
     if (bAnyDebug)
     {
@@ -600,7 +605,7 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
             const FVector Center(CX, CY, ZC);
 
             // ── 热力图：实心四边形 ────────────────────────────────────
-            if (bDrawHeatmap && !bBlocked)
+            if (S->bDrawHeatmap && !bBlocked)
             {
                 FLinearColor Base;
                 if (Cell.IsReachable() && MaxInteg > 0.f)
@@ -608,19 +613,19 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
                     // 16 步量化 → SceneProxy 按颜色分组，DrawCall 数 ≤ 16
                     const float T = FMath::RoundToFloat(
                         FMath::Clamp(Cell.Integration / MaxInteg, 0.f, 1.f) * 15.f) / 15.f;
-                    Base = FLinearColor::LerpUsingHSV(DebugHeatLow, DebugHeatHigh, T);
+                    Base = FLinearColor::LerpUsingHSV(S->DebugHeatLow, S->DebugHeatHigh, T);
                 }
                 else
                 {
-                    Base = DebugColorNoFlow;
+                    Base = S->DebugColorNoFlow;
                 }
                 Quads.Add({ {TL, TR, BR, BL}, Base.ToFColor(false) });
             }
 
             // ── 网格轮廓 ──────────────────────────────────────────────
-            if (bDrawGrid)
+            if (S->bDrawGrid)
             {
-                const FLinearColor& Col  = bBlocked ? DebugColorObstacle : DebugColorWalkable;
+                const FLinearColor& Col  = bBlocked ? S->DebugColorObstacle : S->DebugColorWalkable;
                 const float        Thick = bBlocked ? 1.5f : 0.5f;
                 Lines.Add({TL, TR, Col, Thick});
                 Lines.Add({TR, BR, Col, Thick});
@@ -629,13 +634,13 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
             }
 
             // ── 流场箭头 / 无流场圆圈 ────────────────────────────────
-            if (bDrawFlow && !bBlocked)
+            if (S->bDrawFlow && !bBlocked)
             {
                 if (!Cell.FlowDir.IsZero())
                 {
                     // ── 有方向：画箭头 ──────────────────────────────────
                     FVector Dir = FVector(Cell.FlowDir.X, Cell.FlowDir.Y, 0.f).GetSafeNormal();
-                    const float Len  = Grid.CellSize * ArrowScale;
+                    const float Len  = Grid.CellSize * S->ArrowScale;
                     const float TipX = CX + Dir.X * Len;
                     const float TipY = CY + Dir.Y * Len;
 
@@ -656,14 +661,14 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
                         (ZTL + ZBL - ZTR - ZBR) / (2.f * Grid.CellSize),
                         (ZTL + ZTR - ZBL - ZBR) / (2.f * Grid.CellSize),
                         1.f).GetSafeNormal();
-                    Lines.Add({Center, Tip, DebugColorArrow, 1.5f});
-                    Lines.Add({Tip, Tip + Dir.RotateAngleAxis( 145.f, SlopeNormal) * Len * 0.3f, DebugColorArrow, 1.f});
-                    Lines.Add({Tip, Tip + Dir.RotateAngleAxis(-145.f, SlopeNormal) * Len * 0.3f, DebugColorArrow, 1.f});
+                    Lines.Add({Center, Tip, S->DebugColorArrow, 1.5f});
+                    Lines.Add({Tip, Tip + Dir.RotateAngleAxis( 145.f, SlopeNormal) * Len * 0.3f, S->DebugColorArrow, 1.f});
+                    Lines.Add({Tip, Tip + Dir.RotateAngleAxis(-145.f, SlopeNormal) * Len * 0.3f, S->DebugColorArrow, 1.f});
                 }
                 else
                 {
                     // ── 无方向：画小圆圈（贴合地形）──────────────────────
-                    const float R    = Grid.CellSize * ArrowScale * 0.35f;
+                    const float R    = Grid.CellSize * S->ArrowScale * 0.35f;
                     const int32 Segs = 8;
                     for (int32 i = 0; i < Segs; ++i)
                     {
@@ -673,7 +678,7 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
                         Lines.Add({
                             FVector(CX + FMath::Cos(A0) * R, CY + FMath::Sin(A0) * R, ZC),
                             FVector(CX + FMath::Cos(A1) * R, CY + FMath::Sin(A1) * R, ZC),
-                            DebugColorNoFlow, 0.8f
+                            S->DebugColorNoFlow, 0.8f
                         });
                     }
                 }
@@ -686,11 +691,11 @@ void AFlowFieldActor::RebuildDebugLines(FVector CamPos)
     {
         const FVector Above = CurrentGoal + FVector(0, 0, 50.f);
         const float   R     = Grid.CellSize * 0.35f;
-        Lines.Add({Above + FVector( R, 0, 0), Above + FVector(0,  R, 0), DebugColorGoal, 2.f});
-        Lines.Add({Above + FVector(0,  R, 0), Above + FVector(-R, 0, 0), DebugColorGoal, 2.f});
-        Lines.Add({Above + FVector(-R, 0, 0), Above + FVector(0, -R, 0), DebugColorGoal, 2.f});
-        Lines.Add({Above + FVector(0, -R, 0), Above + FVector( R, 0, 0), DebugColorGoal, 2.f});
-        Lines.Add({CurrentGoal, Above, DebugColorGoal, 2.f});
+        Lines.Add({Above + FVector( R, 0, 0), Above + FVector(0,  R, 0), S->DebugColorGoal, 2.f});
+        Lines.Add({Above + FVector(0,  R, 0), Above + FVector(-R, 0, 0), S->DebugColorGoal, 2.f});
+        Lines.Add({Above + FVector(-R, 0, 0), Above + FVector(0, -R, 0), S->DebugColorGoal, 2.f});
+        Lines.Add({Above + FVector(0, -R, 0), Above + FVector( R, 0, 0), S->DebugColorGoal, 2.f});
+        Lines.Add({CurrentGoal, Above, S->DebugColorGoal, 2.f});
     }
 
     DebugComp->Update(MoveTemp(Lines), MoveTemp(Quads));
