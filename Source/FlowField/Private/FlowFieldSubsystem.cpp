@@ -118,6 +118,33 @@ bool UFlowFieldSubsystem::IsReady() const
 	return FlowFieldActor && FlowFieldActor->bReady;
 }
 
+// ── 攻击系统转发 ──────────────────────────────────────────────────
+
+int32 UFlowFieldSubsystem::FireAttack(const FFlowFieldAttackConfig& Config)
+{
+    if (FlowFieldActor && FlowFieldActor->AttackComp)
+        return FlowFieldActor->AttackComp->FireAttack(Config);
+    return -1;
+}
+
+void UFlowFieldSubsystem::CancelAttack(int32 AttackId)
+{
+    if (FlowFieldActor && FlowFieldActor->AttackComp)
+        FlowFieldActor->AttackComp->CancelAttack(AttackId);
+}
+
+void UFlowFieldSubsystem::KillAgent(int32 EntityId)
+{
+    if (FlowFieldActor && FlowFieldActor->AttackComp)
+        FlowFieldActor->AttackComp->KillAgent(EntityId);
+}
+
+void UFlowFieldSubsystem::DestroyAgent(int32 EntityId)
+{
+    if (FlowFieldActor && FlowFieldActor->AttackComp)
+        FlowFieldActor->AttackComp->DestroyAgent(EntityId);
+}
+
 // ── 击退 ──────────────────────────────────────────────────────────
 
 void UFlowFieldSubsystem::ApplyKnockback(FVector WorldPos, float Radius,

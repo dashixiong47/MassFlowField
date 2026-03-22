@@ -25,6 +25,8 @@ void UFlowFieldAgentTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
     AgentFrag.CrowdSpeedMin         = CrowdSpeedMin;
     AgentFrag.CrowdDensityFullAt    = CrowdDensityFullAt;
     AgentFrag.CrowdInertiaSmoothing = CrowdInertiaSmoothing;
+    AgentFrag.bAutoDestroy          = bAutoDestroy;
+    AgentFrag.DeathLingerTime       = DeathLingerTime;
 
     BuildContext.AddTag<FFlowFieldAgentTag>();
     BuildContext.AddTag<FFlowFieldMovingTag>();

@@ -39,6 +39,9 @@ AFlowFieldActor::AFlowFieldActor()
     DebugComp->SetAbsolute(true, true, true); // 世界坐标，不随 Actor 偏移
     DebugComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     DebugComp->SetCastShadow(false);
+
+    // 攻击管理组件
+    AttackComp = CreateDefaultSubobject<UFlowFieldAttackComponent>("FlowFieldAttackComp");
 }
 
 void AFlowFieldActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

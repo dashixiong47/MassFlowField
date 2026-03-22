@@ -45,6 +45,18 @@ public:
         meta=(ClampMin="1", ClampMax="30", DisplayName="最大感知邻居数"))
     int32 RVOMaxNeighbors = 10;
 
+    // ── 死亡 ──────────────────────────────────────────────────────
+
+    /** 死亡后自动销毁。false = 等 BP 调 DestroyAgent（适合先播死亡动画）。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|死亡",
+        meta=(DisplayName="自动销毁"))
+    bool bAutoDestroy = true;
+
+    /** 延迟销毁时间（s）。0=立即；>0=死亡后等待此时间再销毁，用于播放死亡动画。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|死亡",
+        meta=(ClampMin="0", DisplayName="延迟销毁时间（s）"))
+    float DeathLingerTime = 0.f;
+
     // ── 人群压力 ──────────────────────────────────────────────────
 
     /** 密集时速度下限（占基础速度比例，0~1）。邻居达到满减速数时 AI 最慢只有 CrowdSpeedMin × MoveSpeed。 */

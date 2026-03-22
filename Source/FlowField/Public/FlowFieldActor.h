@@ -6,6 +6,7 @@
 #include "FlowFieldGrid.h"
 #include "FlowFieldDebugComponent.h"
 #include "FlowFieldTargetComponent.h"
+#include "FlowFieldAttackComponent.h"
 #include "FlowFieldActor.generated.h"
 
 class UFlowFieldObstacleComponent;
@@ -209,6 +210,10 @@ public:
     // 人群计数（由 RVO 处理器每帧写入，Tick 读取后分发到各目标组件）
     // 与 TrackedTargets 等长，索引对应
     TArray<int32> CrowdCounts;
+
+    // 攻击管理组件（由 AttackProcessor 每帧驱动）
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="FlowField|攻击")
+    UFlowFieldAttackComponent* AttackComp = nullptr;
 
     // 目标注册接口（由 UFlowFieldTargetComponent 在 BeginPlay/EndPlay 调用）
     void RegisterTarget(UFlowFieldTargetComponent* Comp);

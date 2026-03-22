@@ -5,6 +5,7 @@
 #include "MassEntityTypes.h"
 #include "MassEntityQuery.h"
 #include "MassClientBubbleInfoBase.h"
+#include "FlowFieldAttackTypes.h"
 #include "FlowFieldSubsystem.generated.h"
 
 class AFlowFieldActor;
@@ -86,6 +87,28 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="FlowField")
     AFlowFieldActor* GetActor() const { return FlowFieldActor; }
+
+    // ── 攻击系统 ──────────────────────────────────────────────────
+
+    /** 发起攻击，返回 AttackId。config 中 Type 决定飞行体/激光/爆炸。 */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击")
+    int32 FireAttack(const FFlowFieldAttackConfig& Config);
+
+    /** 提前取消攻击（触发 OnAttackEnd）。 */
+    UFUNCTION(BlueprintCallable, Category="FlowField|攻击")
+    void CancelAttack(int32 AttackId);
+
+    /**
+     * 将实体标记为死亡（添加 DeadTag，停止移动/RVO）。
+     * bAutoDestroy=true 时在 DeathLingerTime 后自动销毁；
+     * bAutoDestroy=false 时需手动调用 DestroyAgent。
+     */
+    UFUNCTION(BlueprintCallable, Category="FlowField|死亡")
+    void KillAgent(int32 EntityId);
+
+    /** 立即销毁 Mass 实体（广播 OnEntityDestroyed 后移除）。 */
+    UFUNCTION(BlueprintCallable, Category="FlowField|死亡")
+    void DestroyAgent(int32 EntityId);
 
     // ── 击退 ──────────────────────────────────────────────────────
 

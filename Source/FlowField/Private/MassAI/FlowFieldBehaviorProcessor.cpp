@@ -27,6 +27,7 @@ void UFlowFieldBehaviorProcessor::ConfigureQueries(
 {
     EntityQuery.Initialize(EntityManager);
     EntityQuery.AddTagRequirement<FFlowFieldAgentTag>(EMassFragmentPresence::All);
+    EntityQuery.AddTagRequirement<FFlowFieldDeadTag>(EMassFragmentPresence::None);
     EntityQuery.AddRequirement<FFlowFieldAgentFragment>(EMassFragmentAccess::ReadWrite);
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
     // FMassActorFragment 仅非 VAT 路径有，Optional 兼容两种路径

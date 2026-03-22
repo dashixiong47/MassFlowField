@@ -32,6 +32,7 @@ void UFlowFieldRVOProcessor::ConfigureQueries(
 {
     EntityQuery.Initialize(EntityManager);
     EntityQuery.AddTagRequirement<FFlowFieldAgentTag>(EMassFragmentPresence::All);
+    EntityQuery.AddTagRequirement<FFlowFieldDeadTag>(EMassFragmentPresence::None);
     EntityQuery.AddTagRequirement<FFlowFieldMovingTag>(EMassFragmentPresence::Optional);
     EntityQuery.AddRequirement<FFlowFieldAgentFragment>(EMassFragmentAccess::ReadWrite);
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);

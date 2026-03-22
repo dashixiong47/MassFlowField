@@ -3,6 +3,13 @@
 #include "MassEntityTypes.h"
 #include "FlowFieldAgentFragment.generated.h"
 
+// 标识已死亡的实体（所有 Processor 在查询层过滤，零额外循环开销）
+USTRUCT()
+struct FLOWFIELD_API FFlowFieldDeadTag : public FMassTag
+{
+    GENERATED_BODY()
+};
+
 // 标识为 FlowField 管理的 AI 实体
 USTRUCT()
 struct FLOWFIELD_API FFlowFieldAgentTag : public FMassTag
@@ -38,6 +45,11 @@ struct FLOWFIELD_API FFlowFieldAgentFragment : public FMassFragment
     UPROPERTY() float   RVOTimeHorizon       = 1.5f;  // 预测碰撞的时间窗（s），越大越平滑但分散越慢
     UPROPERTY() float   RVONeighborDist      = 0.f;   // 感知范围（cm），0 = 运行时自动算 AgentRadius*5
     UPROPERTY() int32   RVOMaxNeighbors      = 10;    // 最多感知几个邻居
+
+    // ── 死亡（由 Trait 写入配置，运行时由 AttackProcessor 更新）────
+    UPROPERTY() bool  bAutoDestroy    = true;  // 死亡后自动销毁（false=等 BP 手动调 DestroyAgent）
+    UPROPERTY() float DeathLingerTime = 0.f;   // 延迟销毁时间（s），0=立即，>0 可播放死亡动画
+    UPROPERTY() float DeathTimer      = 0.f;   // 运行时计时器（不需要 Trait 配置）
 
     // ── 人群压力（由 Trait 写入，LocalNeighborCount 由 RVO Pass2 更新）──
     UPROPERTY() int32   LocalNeighborCount    = 0;     // 当帧 RVO 实际邻居数（供下帧密度计算）
