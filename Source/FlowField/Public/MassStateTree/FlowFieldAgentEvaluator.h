@@ -65,6 +65,10 @@ struct FLOWFIELD_API FFlowFieldAgentEvaluatorInstanceData
         meta=(Output, DisplayName="追踪目标世界位置"))
     FVector ChaseTargetPos = FVector::ZeroVector;
 
+    UPROPERTY(EditAnywhere, Category="FlowField|输出",
+        meta=(Output, DisplayName="在攻击距离内"))
+    bool bInAttackRange = false;
+
     // ── 地面 ──────────────────────────────────────────────────────
 
     UPROPERTY(EditAnywhere, Category="FlowField|输出",

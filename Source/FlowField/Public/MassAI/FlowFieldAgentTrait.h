@@ -51,6 +51,33 @@ public:
         meta=(ClampMin="0.1", DisplayName="高度平滑速度"))
     float SurfaceZSmoothSpeed = 10.f;
 
+    // ── 感知 ──────────────────────────────────────────────────────
+
+    UPROPERTY(EditAnywhere, Category="FlowField|感知",
+        meta=(ClampMin="1", DisplayName="感知范围（cm）",
+              ToolTip="AI 距目标小于此值时进入追踪模式，替代 TargetComponent 上的 ChaseRadius"))
+    float DetectRadius = 500.f;
+
+    UPROPERTY(EditAnywhere, Category="FlowField|感知",
+        meta=(ClampMin="0", DisplayName="遗忘时间（s）",
+              ToolTip="目标离开感知范围后，AI 仍追踪的时间。0 = 立即放弃"))
+    float ForgetTime = 2.0f;
+
+    // ── 攻击 ──────────────────────────────────────────────────────
+
+    UPROPERTY(EditAnywhere, Category="FlowField|攻击",
+        meta=(ClampMin="1", DisplayName="攻击距离（cm）",
+              ToolTip="AI 距目标小于此值时 bInAttackRange=true"))
+    float AttackRange = 120.f;
+
+    UPROPERTY(EditAnywhere, Category="FlowField|攻击",
+        meta=(ClampMin="0.1", DisplayName="攻击间隔（s）"))
+    float AttackInterval = 1.0f;
+
+    UPROPERTY(EditAnywhere, Category="FlowField|攻击",
+        meta=(ClampMin="0", DisplayName="攻击伤害"))
+    float AttackDamage = 10.f;
+
     // ── VAT 渲染 ──────────────────────────────────────────────────
 
     /**
@@ -66,49 +93,6 @@ public:
     UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
         meta=(EditCondition="bUseVATRendering", DisplayName="VAT 数据资产"))
     TSoftObjectPtr<UFlowFieldVATDataAsset> VATDataAsset;
-
-    /**
-     * 启用远景低精度网格体。
-     * 开启后超过切换距离的实体改用简单网格体渲染，节省 VAT 着色器开销。
-     */
-    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
-        meta=(EditCondition="bUseVATRendering", DisplayName="启用远景 LOD 网格"))
-    bool bUseLODMesh = false;
-
-    /**
-     * 远景低精度网格体。
-     * 超过切换距离后替代 VAT 网格，材质通常比 VAT 材质便宜得多。
-     */
-    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
-        meta=(EditCondition="bUseVATRendering && bUseLODMesh", DisplayName="远景 LOD 网格体"))
-    TObjectPtr<UStaticMesh> LODMesh;
-
-    /** 远景 LOD 网格体材质（不填使用网格体默认材质） */
-    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
-        meta=(EditCondition="bUseVATRendering && bUseLODMesh", DisplayName="远景 LOD 材质"))
-    TObjectPtr<UMaterialInterface> LODMeshMaterial;
-
-    /**
-     * VAT → LOD 网格切换距离（cm）。
-     * 超过此距离后切换到低精度网格。
-     */
-    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
-        meta=(ClampMin="0", EditCondition="bUseVATRendering && bUseLODMesh", DisplayName="LOD 切换距离（cm）"))
-    float LODSwitchDistance = 5000.f;
-
-    /**
-     * 启用距离剔除。
-     * 开启后超过剔除距离的实体会从 ISM 中移除，不占 GPU 资源。
-     * 关闭时所有实体始终渲染（适合小规模调试）。
-     */
-    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
-        meta=(EditCondition="bUseVATRendering", DisplayName="启用距离剔除"))
-    bool bEnableDistanceCulling = true;
-
-    /** 剔除距离（cm）。超出此距离的实体不渲染，从 ISM 中移除。 */
-    UPROPERTY(EditAnywhere, Category="FlowField|VAT渲染",
-        meta=(ClampMin="100", EditCondition="bUseVATRendering && bEnableDistanceCulling", DisplayName="剔除距离（cm）"))
-    float CullDistance = 10000.f;
 
     virtual void BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const override;
 };

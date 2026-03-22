@@ -15,8 +15,11 @@ class UInstancedStaticMeshComponent;
 // 被追踪目标信息（由 UpdateTarget 定时缓存，供各 Processor 读取）
 struct FFlowFieldTrackedTarget
 {
-    FVector Position = FVector::ZeroVector;
-    float   Radius   = 0.f;
+    FVector Position     = FVector::ZeroVector;
+    float   PushRadius   = 100.f; // 玩家推挤 AI + 计入减速的接触半径（cm）
+    float   PushStrength = 600.f; // 最大推挤速度（cm/s），近处最强
+    TWeakObjectPtr<UFlowFieldTargetComponent> OwnerComp; // 回写减速乘数用
+    // 注：AI 感知范围由各实体 Fragment.DetectRadius 决定，不再存于此结构体
 };
 
 UCLASS()
@@ -87,6 +90,16 @@ public:
     UPROPERTY(EditAnywhere, Category="FlowField|调试",
         meta=(ClampMin="500", ClampMax="50000", DisplayName="调试绘制距离（cm）"))
     float DebugDrawDistance = 5000.f;
+
+    /** 绘制每个目标的推挤范围（黄色圆圈），范围 = PushRadius */
+    UPROPERTY(EditAnywhere, Category="FlowField|调试",
+        meta=(DisplayName="绘制目标推挤范围"))
+    bool bDrawTargetRanges = false;
+
+    /** 绘制每个 AI 实体的感知范围（青色圆圈），受 DebugDrawDistance 距离剔除 */
+    UPROPERTY(EditAnywhere, Category="FlowField|调试",
+        meta=(DisplayName="绘制 AI 感知范围"))
+    bool bDrawAgentRanges = false;
 
     // ── 调试颜色 ──────────────────────────────────────────────────
 
@@ -191,6 +204,11 @@ public:
     FVector GetCellCenter(FIntPoint Cell) const;
 
     const TArray<FFlowFieldTrackedTarget>& GetTrackedTargets() const { return TrackedTargets; }
+    const TArray<TWeakObjectPtr<UFlowFieldObstacleComponent>>& GetRegisteredObstacles() const { return RegisteredObstacles; }
+
+    // 人群计数（由 RVO 处理器每帧写入，Tick 读取后分发到各目标组件）
+    // 与 TrackedTargets 等长，索引对应
+    TArray<int32> CrowdCounts;
 
     // 目标注册接口（由 UFlowFieldTargetComponent 在 BeginPlay/EndPlay 调用）
     void RegisterTarget(UFlowFieldTargetComponent* Comp);

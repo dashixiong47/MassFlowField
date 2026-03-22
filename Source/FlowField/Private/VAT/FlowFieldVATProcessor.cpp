@@ -144,9 +144,19 @@ void UFlowFieldVATProcessor::Execute(FMassEntityManager& EntityManager, FMassExe
                 }
                 FMassInstancedStaticMeshInfo& ISMInfo = ISMInfosView[ISMInfoIndex];
 
+                // 应用网格朝向修正（本地旋转偏移，修正模型前向与 +X 不一致的问题）
+                FTransform SubmitTransform = WorldTransform;
+                if (VATFrag.DataAsset
+                    && !VATFrag.DataAsset->MeshRotationOffset.IsNearlyZero())
+                {
+                    SubmitTransform.SetRotation(
+                        WorldTransform.GetRotation() *
+                        VATFrag.DataAsset->MeshRotationOffset.Quaternion());
+                }
+
                 ISMInfo.AddBatchedTransform(
                     ChunkContext.GetEntity(i),
-                    WorldTransform,
+                    SubmitTransform,
                     RepFrag.PrevTransform,
                     LODSig,
                     PrevLODSig);

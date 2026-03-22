@@ -33,6 +33,7 @@ void FFlowFieldAgentEvaluator::Tick(FStateTreeExecutionContext& Context, const f
     InstanceData.bInStopZone      = Agent.bInStopZone;
     InstanceData.bChasingTarget   = Agent.bChasingTarget;
     InstanceData.ChaseTargetPos   = Agent.ChaseTargetPos;
+    InstanceData.bInAttackRange   = Agent.bInAttackRange;
 
     // ── 地面 ────────────────────────────────────────────────────
     InstanceData.SmoothedSurfaceZ = Agent.SmoothedSurfaceZ;

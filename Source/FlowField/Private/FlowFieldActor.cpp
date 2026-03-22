@@ -108,7 +108,40 @@ void AFlowFieldActor::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
 
-    // 没有任何调试开关打开时跳过
+    // ── 每帧刷新目标位置（减少推挤延迟，避免依赖 0.5s 定时器）──
+    {
+        FRWScopeLock WriteLock(GridRWLock, SLT_Write);
+        for (FFlowFieldTrackedTarget& T : TrackedTargets)
+        {
+            UFlowFieldTargetComponent* Comp = T.OwnerComp.Get();
+            if (Comp && Comp->GetOwner())
+                T.Position = Comp->GetOwner()->GetActorLocation();
+        }
+    }
+
+    // ── 分发人群计数 → 更新各目标组件的速度乘数 ─────────────────
+    for (int32 i = 0; i < TrackedTargets.Num() && i < CrowdCounts.Num(); ++i)
+    {
+        UFlowFieldTargetComponent* Comp = TrackedTargets[i].OwnerComp.Get();
+        if (!Comp) continue;
+        const float Frac = FMath::Clamp(
+            (float)CrowdCounts[i] / (float)FMath::Max(1, Comp->AgentsForMaxSlow),
+            0.f, 1.f);
+        Comp->CurrentSpeedMultiplier = FMath::Lerp(1.f, Comp->MaxSlowdownFactor, Frac);
+    }
+
+    // ── 调试：追踪范围平面圆（地面投影，黄色）────────────────────
+    if (bDrawTargetRanges)
+    {
+        UWorld* W = GetWorld();
+        for (const FFlowFieldTrackedTarget& T : TrackedTargets)
+        {
+            DrawDebugCircle(W, T.Position, T.PushRadius, 32, FColor(255, 220, 0),
+                false, 0.f, 0, 2.f, FVector(1,0,0), FVector(0,1,0));
+        }
+    }
+
+    // 没有任何调试开关打开时跳过网格/流场调试
     if (!bDrawGrid && !bDrawFlow && !bDrawHeatmap) return;
     if (!Grid.IsValid()) return;
 
@@ -140,6 +173,16 @@ void AFlowFieldActor::Tick(float DeltaSeconds)
         RebuildDebugLines(CamPos);
     }
 
+    // 追踪目标范围球（黄色，每帧绘制 0 duration = 单帧持续）
+    if (bDrawTargetRanges)
+    {
+        UWorld* W = GetWorld();
+        for (const FFlowFieldTrackedTarget& T : TrackedTargets)
+        {
+            DrawDebugSphere(W, T.Position, T.PushRadius,
+                32, FColor(255, 220, 0), false, 0.f, 0, 2.f);
+        }
+    }
 }
 
 void AFlowFieldActor::OnRep_CurrentGoal()
@@ -724,8 +767,15 @@ void AFlowFieldActor::UpdateTarget()
             RegisteredTargets.RemoveAtSwap(i); // 清理已销毁的目标
             continue;
         }
-        TrackedTargets.Add({Comp->GetOwner()->GetActorLocation(), Comp->ChaseRadius});
+        FFlowFieldTrackedTarget T;
+        T.Position     = Comp->GetOwner()->GetActorLocation();
+        T.PushRadius   = Comp->PushRadius;
+        T.PushStrength = Comp->PushStrength;
+        T.OwnerComp    = Comp;
+        TrackedTargets.Add(T);
     }
+
+    CrowdCounts.SetNumZeroed(TrackedTargets.Num());
 }
 
 void AFlowFieldActor::RegisterObstacle(UFlowFieldObstacleComponent* Comp)

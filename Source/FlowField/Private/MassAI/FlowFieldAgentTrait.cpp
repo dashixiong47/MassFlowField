@@ -17,6 +17,11 @@ void UFlowFieldAgentTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
     AgentFrag.RVONeighborDist    = (RVONeighborDist > 0.f) ? RVONeighborDist : AgentRadius * 5.f;
     AgentFrag.RVOMaxNeighbors    = RVOMaxNeighbors;
     AgentFrag.SurfaceZSmoothSpeed = SurfaceZSmoothSpeed;
+    AgentFrag.DetectRadius        = DetectRadius;
+    AgentFrag.ForgetTime          = ForgetTime;
+    AgentFrag.AttackRange         = AttackRange;
+    AgentFrag.AttackInterval      = AttackInterval;
+    AgentFrag.AttackDamage        = AttackDamage;
 
     BuildContext.AddTag<FFlowFieldAgentTag>();
     BuildContext.AddTag<FFlowFieldMovingTag>();
@@ -57,8 +62,10 @@ void UFlowFieldAgentTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
         }
         VATMeshDesc.bCastShadows  = true;
         VATMeshDesc.Mobility      = EComponentMobility::Movable;
-        // LOD 范围：High(0) ~ Low(2) 或 Off(3)（当没有 LOD 网格时覆盖到 Off）
-        const bool bHasLODMesh = bUseLODMesh && (LODMesh != nullptr) && (LODSwitchDistance > 0.f);
+        // LOD 参数全部从 DataAsset 读取
+        const bool bHasLODMesh = Asset->bUseLODMesh
+            && (Asset->LODMesh != nullptr)
+            && (Asset->LODSwitchDistance > 0.f);
         VATMeshDesc.MinLODSignificance = float(EMassLOD::High);   // 0
         VATMeshDesc.MaxLODSignificance = bHasLODMesh
             ? float(EMassLOD::Low)  // 2（切换后由 LOD 网格接管）
@@ -69,10 +76,10 @@ void UFlowFieldAgentTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
         if (bHasLODMesh)
         {
             FMassStaticMeshInstanceVisualizationMeshDesc LODMeshDesc;
-            LODMeshDesc.Mesh = LODMesh;
-            if (LODMeshMaterial)
+            LODMeshDesc.Mesh = Asset->LODMesh;
+            if (Asset->LODMeshMaterial)
             {
-                LODMeshDesc.MaterialOverrides.Add(LODMeshMaterial);
+                LODMeshDesc.MaterialOverrides.Add(Asset->LODMeshMaterial);
             }
             LODMeshDesc.bCastShadows  = false;
             LODMeshDesc.Mobility      = EComponentMobility::Movable;
@@ -108,10 +115,10 @@ void UFlowFieldAgentTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
 
         // LOD 距离配置（ConstShared，同 Trait 配置的实体共享）
         FFlowFieldVATSharedData VATShared;
-        VATShared.LODSwitchDistance = bHasLODMesh ? LODSwitchDistance : 0.f;
+        VATShared.LODSwitchDistance = bHasLODMesh ? Asset->LODSwitchDistance : 0.f;
         // 未启用距离剔除时设为极大值，处理器中 MinDistSq 永远 < CullDistSq
-        VATShared.CullDistance      = bEnableDistanceCulling
-            ? FMath::Max(CullDistance, 100.f)
+        VATShared.CullDistance      = Asset->bEnableDistanceCulling
+            ? FMath::Max(Asset->CullDistance, 100.f)
             : 1e9f;
         FConstSharedStruct VATSharedStruct = EntityManager.GetOrCreateConstSharedFragment(VATShared);
         BuildContext.AddConstSharedFragment(VATSharedStruct);

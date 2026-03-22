@@ -87,7 +87,7 @@ void UFlowFieldMovementProcessor::Execute(
                             Pos.Y + Agent.KnockbackVelocity.Y * DeltaTime,
                             Agent.bSurfaceInitialized ? Agent.SmoothedSurfaceZ : Pos.Z);
 
-                        if (FlowActor->GetIntegration(NewPos) < 0.f)
+                        if (bFlowReady && FlowActor->GetIntegration(NewPos) < 0.f)
                         {
                             FVector TryX = FVector(NewPos.X, Pos.Y, NewPos.Z);
                             FVector TryY = FVector(Pos.X, NewPos.Y, NewPos.Z);
@@ -159,7 +159,62 @@ void UFlowFieldMovementProcessor::Execute(
                     }
                 }
 
-                if (!bFlowReady) continue;
+                if (!bFlowReady)
+                {
+                    // 无流场：仅处理追踪（或被推挤）状态下的移动
+                    const bool bHasVelocity =
+                        Agent.RVOComputedVelocity.SizeSquared2D() >
+                        FMath::Square(Agent.MoveSpeed * VelocityDeadZonePct);
+                    if (!Agent.bChasingTarget && !bHasVelocity) continue;
+
+                    // 朝目标方向旋转
+                    if (Agent.bChasingTarget && !Agent.ChaseTargetPos.IsZero())
+                    {
+                        FVector RotDir = (Agent.ChaseTargetPos - Pos).GetSafeNormal2D();
+                        if (!RotDir.IsNearlyZero())
+                        {
+                            Agent.CurrentDir = Agent.CurrentDir.IsNearlyZero()
+                                ? RotDir
+                                : FMath::VInterpTo(Agent.CurrentDir, RotDir,
+                                    DeltaTime, Agent.DirSmoothing).GetSafeNormal2D();
+                            Transform.SetRotation(FMath::RInterpTo(CurRotator,
+                                Agent.CurrentDir.ToOrientationRotator(),
+                                DeltaTime, RotationInterpSpeed).Quaternion());
+                        }
+                    }
+
+                    // 速度平滑 + 移动（格子未就绪，跳过障碍检测）
+                    Agent.SmoothedMoveVelocity = FMath::VInterpTo(
+                        Agent.SmoothedMoveVelocity, Agent.RVOComputedVelocity,
+                        DeltaTime, VelocitySmoothSpeed);
+                    FVector NoFlowVel = Agent.SmoothedMoveVelocity;
+
+                    // 玩家推挤
+                    for (const FFlowFieldTrackedTarget& TT : FlowActor->GetTrackedTargets())
+                    {
+                        if (TT.PushRadius <= 0.f) continue;
+                        const float DX    = Pos.X - TT.Position.X;
+                        const float DY    = Pos.Y - TT.Position.Y;
+                        const float DistSq = DX * DX + DY * DY;
+                        if (DistSq < FMath::Square(TT.PushRadius) && DistSq > 1.f)
+                        {
+                            const float Dist    = FMath::Sqrt(DistSq);
+                            const float PushMag = TT.PushStrength * (1.f - Dist / TT.PushRadius);
+                            NoFlowVel.X += (DX / Dist) * PushMag;
+                            NoFlowVel.Y += (DY / Dist) * PushMag;
+                        }
+                    }
+
+                    if (NoFlowVel.SizeSquared2D() >
+                        FMath::Square(Agent.MoveSpeed * VelocityDeadZonePct))
+                    {
+                        Transform.SetLocation(FVector(
+                            Pos.X + NoFlowVel.X * DeltaTime,
+                            Pos.Y + NoFlowVel.Y * DeltaTime,
+                            Pos.Z));
+                    }
+                    continue;
+                }
 
                 // ── 在障碍内：推到最近可走格子 ───────────────────────
                 if (FlowActor->GetIntegration(Pos) < 0.f)
@@ -288,6 +343,22 @@ void UFlowFieldMovementProcessor::Execute(
                     {
                         FVector CorrDir = (Agent.CorrectionTargetLocation - Pos).GetSafeNormal2D();
                         MoveVel = CorrDir * MoveVel.Size2D();
+                    }
+                }
+
+                // ── 玩家推挤（每帧直接叠加，不受 RVO 跳帧影响）────
+                for (const FFlowFieldTrackedTarget& TT : FlowActor->GetTrackedTargets())
+                {
+                    if (TT.PushRadius <= 0.f) continue;
+                    const float DX    = Pos.X - TT.Position.X;
+                    const float DY    = Pos.Y - TT.Position.Y;
+                    const float DistSq = DX * DX + DY * DY;
+                    if (DistSq < FMath::Square(TT.PushRadius) && DistSq > 1.f)
+                    {
+                        const float Dist    = FMath::Sqrt(DistSq);
+                        const float PushMag = TT.PushStrength * (1.f - Dist / TT.PushRadius);
+                        MoveVel.X += (DX / Dist) * PushMag;
+                        MoveVel.Y += (DY / Dist) * PushMag;
                     }
                 }
 

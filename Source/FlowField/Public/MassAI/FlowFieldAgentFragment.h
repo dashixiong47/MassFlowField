@@ -59,6 +59,30 @@ struct FLOWFIELD_API FFlowFieldAgentFragment : public FMassFragment
     UPROPERTY() bool    bIsKnockedBack     = false;               // 是否正在被击退
 
     // ── 追踪目标 ──────────────────────────────────────────────────
-    UPROPERTY() bool    bChasingTarget = false;               // 是否正在追踪动态目标
-    UPROPERTY() FVector ChaseTargetPos = FVector::ZeroVector; // 当前追踪的目标世界位置
+    UPROPERTY() bool    bAtWall         = false;               // 是否已贴附目标障碍物包围圈（攻城模式）
+    UPROPERTY() bool    bChasingTarget  = false;               // 是否正在追踪动态目标
+    UPROPERTY() FVector ChaseTargetPos  = FVector::ZeroVector; // 当前追踪的目标世界位置
+    UPROPERTY() bool    bInAttackRange  = false;               // 是否进入攻击距离
+    UPROPERTY() float   AttackRange     = 120.f;               // 攻击距离（cm），由 Trait 写入
+
+    // ── 感知配置（由 Trait 写入）─────────────────────────────────
+    UPROPERTY() float   DetectRadius    = 500.f; // AI 感知/追踪范围（cm），替代目标侧 ChaseRadius
+    UPROPERTY() float   ForgetTime      = 2.0f;  // 离开感知范围后继续追踪的时间（s），0 = 立即遗忘
+
+    // ── 攻击配置（由 Trait 写入）─────────────────────────────────
+    UPROPERTY() float   AttackInterval  = 1.0f;  // 攻击间隔（s）
+    UPROPERTY() float   AttackDamage    = 10.f;  // 每次伤害
+
+    // ── 事件系统运行时状态（由各 Processor 写入）─────────────────
+    UPROPERTY() float   AttackTimer      = 0.f;   // 攻击/障碍攻击累计计时（s）
+    UPROPERTY() float   ForgetTimer      = 0.f;   // 遗忘倒计时（s）
+    UPROPERTY() int32   TargetIndex      = -1;    // 当前/上次追踪的 TrackedTarget 索引
+    UPROPERTY() int32   ObstacleIndex    = -1;    // 当前/上次贴附的障碍索引
+    UPROPERTY() bool    bInChaseRange    = false; // 当帧物理上是否在 DetectRadius 内（RVO 写）
+
+    // 上帧状态快照，用于检测 Enter/Exit 事件
+    UPROPERTY() bool    bWasChasingTarget  = false;
+    UPROPERTY() bool    bWasInAttackRange  = false;
+    UPROPERTY() bool    bWasAtWall         = false;
+    UPROPERTY() bool    bWasInChaseRange   = false; // 用于物理进出范围事件
 };
