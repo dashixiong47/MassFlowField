@@ -22,6 +22,9 @@ void UFlowFieldAgentTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
     AgentFrag.AttackRange         = AttackRange;
     AgentFrag.AttackInterval      = AttackInterval;
     AgentFrag.AttackDamage        = AttackDamage;
+    AgentFrag.CrowdSpeedMin         = CrowdSpeedMin;
+    AgentFrag.CrowdDensityFullAt    = CrowdDensityFullAt;
+    AgentFrag.CrowdInertiaSmoothing = CrowdInertiaSmoothing;
 
     BuildContext.AddTag<FFlowFieldAgentTag>();
     BuildContext.AddTag<FFlowFieldMovingTag>();

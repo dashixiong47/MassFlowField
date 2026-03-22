@@ -45,6 +45,23 @@ public:
         meta=(ClampMin="1", ClampMax="30", DisplayName="最大感知邻居数"))
     int32 RVOMaxNeighbors = 10;
 
+    // ── 人群压力 ──────────────────────────────────────────────────
+
+    /** 密集时速度下限（占基础速度比例，0~1）。邻居达到满减速数时 AI 最慢只有 CrowdSpeedMin × MoveSpeed。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|人群压力",
+        meta=(ClampMin="0.05", ClampMax="1.0", DisplayName="密集最低速度比"))
+    float CrowdSpeedMin = 0.25f;
+
+    /** 达到最大减速效果时的邻居数量。邻居越少时效果越线性递增。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|人群压力",
+        meta=(ClampMin="1", ClampMax="30", DisplayName="满减速邻居数"))
+    int32 CrowdDensityFullAt = 8;
+
+    /** 密集时速度平滑速度（惯性）。越小越重，不易被单个 AI 推动。建议 1~4，须 ≤ 移动处理器的速度平滑值。 */
+    UPROPERTY(EditAnywhere, Category="FlowField|人群压力",
+        meta=(ClampMin="0.5", ClampMax="20.0", DisplayName="密集惯性平滑速度"))
+    float CrowdInertiaSmoothing = 2.f;
+
     // ── 地面贴合 ──────────────────────────────────────────────────
 
     UPROPERTY(EditAnywhere, Category="FlowField|地面贴合",

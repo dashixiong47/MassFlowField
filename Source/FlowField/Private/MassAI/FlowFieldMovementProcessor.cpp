@@ -159,6 +159,13 @@ void UFlowFieldMovementProcessor::Execute(
                     }
                 }
 
+                // ── Layer 1：密度自适应惯性 ───────────────────────────
+                // 邻居越多，速度平滑速度越低（响应越慢 = 越重），防止单个 AI 推动整群
+                const float EffectiveSmoothSpeed = (Agent.CrowdDensityFullAt > 0 && Agent.LocalNeighborCount > 0)
+                    ? FMath::Lerp(VelocitySmoothSpeed, Agent.CrowdInertiaSmoothing,
+                        FMath::Clamp(float(Agent.LocalNeighborCount) / float(Agent.CrowdDensityFullAt), 0.f, 1.f))
+                    : VelocitySmoothSpeed;
+
                 if (!bFlowReady)
                 {
                     // 无流场：仅处理追踪（或被推挤）状态下的移动
@@ -186,7 +193,7 @@ void UFlowFieldMovementProcessor::Execute(
                     // 速度平滑 + 移动（格子未就绪，跳过障碍检测）
                     Agent.SmoothedMoveVelocity = FMath::VInterpTo(
                         Agent.SmoothedMoveVelocity, Agent.RVOComputedVelocity,
-                        DeltaTime, VelocitySmoothSpeed);
+                        DeltaTime, EffectiveSmoothSpeed);
                     FVector NoFlowVel = Agent.SmoothedMoveVelocity;
 
                     // 玩家推挤
@@ -311,10 +318,10 @@ void UFlowFieldMovementProcessor::Execute(
                         DeltaTime, RotationInterpSpeed).Quaternion());
 
                 // ── RVO 计算速度 → 平滑 → 被挤减速 ──────────────────
-                // 速度平滑：对 RVO 原始输出做低通滤波，消除逐帧高频跳变
+                // 速度平滑：对 RVO 原始输出做低通滤波；密集时用更低平滑速度增加惯性感
                 Agent.SmoothedMoveVelocity = FMath::VInterpTo(
                     Agent.SmoothedMoveVelocity, Agent.RVOComputedVelocity,
-                    DeltaTime, VelocitySmoothSpeed);
+                    DeltaTime, EffectiveSmoothSpeed);
 
                 FVector MoveVel = Agent.SmoothedMoveVelocity;
 

@@ -315,6 +315,27 @@ void UFlowFieldRVOProcessor::Execute(
                     }
                 }
 
+                // ── 人群密度限速 + 动态时间窗（Layer 2 & 3）─────────
+                if (Agent.CrowdDensityFullAt > 0)
+                {
+                    const float DensityT = FMath::Clamp(
+                        float(Agent.LocalNeighborCount) / float(Agent.CrowdDensityFullAt),
+                        0.f, 1.f);
+
+                    // Layer 2：压缩期望速度幅值，使密集 AI 整体变慢
+                    const float SpeedMult = FMath::Lerp(1.f, Agent.CrowdSpeedMin, DensityT);
+                    PrefVel = PrefVel * SpeedMult;
+
+                    // Layer 3：动态时间窗——密集时缩短，AI 不再提前大幅侧移，接受更近间距
+                    const float DynHorizon = FMath::Lerp(
+                        Agent.RVOTimeHorizon, Agent.RVOTimeHorizon * 0.2f, DensityT);
+                    RVOSim->setAgentTimeHorizon((std::size_t)Agent.RVOAgentId, DynHorizon);
+
+                    // 同步限制 maxSpeed，防止 RVO 在绕行时突然加速超出期望幅值
+                    const float DynMaxSpeed = Agent.MoveSpeed * 1.2f * SpeedMult;
+                    RVOSim->setAgentMaxSpeed((std::size_t)Agent.RVOAgentId, DynMaxSpeed);
+                }
+
                 RVOSim->setAgentPrefVelocity((std::size_t)Agent.RVOAgentId, PrefVel);
             }
         });
@@ -336,6 +357,10 @@ void UFlowFieldRVOProcessor::Execute(
 
                 const RVO::Vector2& V = RVOSim->getAgentVelocity((std::size_t)Agent.RVOAgentId);
                 Agent.RVOComputedVelocity = FVector(V.x(), V.y(), 0.f);
+
+                // 更新邻居计数（一帧延迟，供下帧密度计算）
+                Agent.LocalNeighborCount = (int32)RVOSim->getAgentNumAgentNeighbors(
+                    (std::size_t)Agent.RVOAgentId);
             }
         });
 

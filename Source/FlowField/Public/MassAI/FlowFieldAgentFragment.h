@@ -39,6 +39,12 @@ struct FLOWFIELD_API FFlowFieldAgentFragment : public FMassFragment
     UPROPERTY() float   RVONeighborDist      = 0.f;   // 感知范围（cm），0 = 运行时自动算 AgentRadius*5
     UPROPERTY() int32   RVOMaxNeighbors      = 10;    // 最多感知几个邻居
 
+    // ── 人群压力（由 Trait 写入，LocalNeighborCount 由 RVO Pass2 更新）──
+    UPROPERTY() int32   LocalNeighborCount    = 0;     // 当帧 RVO 实际邻居数（供下帧密度计算）
+    UPROPERTY() float   CrowdSpeedMin         = 0.25f; // 密集时速度下限（占 MoveSpeed 的比例，0~1）
+    UPROPERTY() int32   CrowdDensityFullAt    = 8;     // 达到最大限速所需邻居数
+    UPROPERTY() float   CrowdInertiaSmoothing = 2.f;   // 密集时速度平滑速度（越小越重）
+
     // 上一帧已知目标位置，用于检测目标切换
     // 注意：不能用 FLT_MAX，WorldToCell 会整数溢出导致切换检测永远失效
     UPROPERTY() FVector LastKnownGoal = FVector(-99999999.f, -99999999.f, 0.f);
