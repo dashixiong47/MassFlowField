@@ -1,4 +1,5 @@
 #include "MassAI/FlowFieldRVOProcessor.h"
+#include "MassAI/FlowFieldAgentConfig.h"
 #include "MassExecutionContext.h"
 #include "MassEntityManager.h"
 #include "MassCommonFragments.h"
@@ -36,6 +37,7 @@ void UFlowFieldRVOProcessor::ConfigureQueries(
     EntityQuery.AddTagRequirement<FFlowFieldMovingTag>(EMassFragmentPresence::Optional);
     EntityQuery.AddRequirement<FFlowFieldAgentFragment>(EMassFragmentAccess::ReadWrite);
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+    EntityQuery.AddConstSharedRequirement<FFlowFieldAgentConfig>();
     EntityQuery.RegisterWithProcessor(*this);
     RegisterQuery(EntityQuery);
 }
@@ -98,6 +100,8 @@ void UFlowFieldRVOProcessor::Execute(
     EntityQuery.ForEachEntityChunk(Context,
         [&](FMassExecutionContext& ChunkContext)
         {
+            const FFlowFieldAgentConfig& Cfg = ChunkContext.GetConstSharedFragment<FFlowFieldAgentConfig>();
+
             auto Agents     = ChunkContext.GetMutableFragmentView<FFlowFieldAgentFragment>();
             auto Transforms = ChunkContext.GetFragmentView<FTransformFragment>();
             const int32 Num = ChunkContext.GetNumEntities();
@@ -113,12 +117,12 @@ void UFlowFieldRVOProcessor::Execute(
                 {
                     const std::size_t Id = RVOSim->addAgent(
                         RVOPos,
-                        Agent.RVONeighborDist,     // neighborDist：感知范围
-                        (std::size_t)Agent.RVOMaxNeighbors,
-                        Agent.RVOTimeHorizon,      // timeHorizon
-                        Agent.RVOTimeHorizon,      // timeHorizonObst（与 timeHorizon 保持一致）
-                        Agent.AgentRadius,         // 实体半径
-                        Agent.MoveSpeed * 1.2f     // maxSpeed 略高于 MoveSpeed，让 RVO 有调整空间
+                        Cfg.RVONeighborDist,       // neighborDist：感知范围
+                        (std::size_t)Cfg.RVOMaxNeighbors,
+                        Cfg.RVOTimeHorizon,        // timeHorizon
+                        Cfg.RVOTimeHorizon,        // timeHorizonObst（与 timeHorizon 保持一致）
+                        Cfg.AgentRadius,           // 实体半径
+                        Cfg.MoveSpeed * 1.2f       // maxSpeed 略高于 MoveSpeed，让 RVO 有调整空间
                     );
                     Agent.RVOAgentId = (int32)Id;
                 }
@@ -144,7 +148,8 @@ void UFlowFieldRVOProcessor::Execute(
                     const float EntityIntegration = FlowActor->GetIntegration(Pos);
                     const bool bAtWall = bGoalInObstacle && EntityIntegration >= 0.f && EntityIntegration < 2.f;
                     const bool bNearGoal  = !bGoalInObstacle && (FVector::DistSquared2D(Pos, EffectiveGoal) < StopDistSq);
-                    const bool bStopped   = bNearGoal || bAtWall;
+                    // 丧尸群：bAtWall 不停止，持续向墙压；只有到达普通目标才停
+                    const bool bStopped   = bNearGoal;
                     Agent.bInStopZone   = bStopped;
                     Agent.bAtWall       = bAtWall;
                     if (bStopped) Agent.bInChaseRange = false;
@@ -159,7 +164,7 @@ void UFlowFieldRVOProcessor::Execute(
                         for (int32 TIdx = 0; TIdx < Targets.Num(); ++TIdx)
                         {
                             // 用 AI 自身的 DetectRadius，不再依赖目标侧配置
-                            if (FVector::DistSquared2D(Pos, Targets[TIdx].Position) <= FMath::Square(Agent.DetectRadius))
+                            if (FVector::DistSquared2D(Pos, Targets[TIdx].Position) <= FMath::Square(Cfg.DetectRadius))
                             {
                                 FoundTargetIdx = TIdx;
                                 ChaseTargetPos = Targets[TIdx].Position;
@@ -171,12 +176,12 @@ void UFlowFieldRVOProcessor::Execute(
                         auto CalcChaseDir = [&](const FVector& TargetPos) -> FVector
                         {
                             FVector Dir = (TargetPos - Pos).GetSafeNormal2D();
-                            if (FlowActor->GetIntegration(Pos + Dir * Agent.AgentRadius * 2.f) < 0.f)
+                            if (FlowActor->GetIntegration(Pos + Dir * Cfg.AgentRadius * 2.f) < 0.f)
                             {
                                 const FVector Left  = FVector(-Dir.Y,  Dir.X, 0.f);
                                 const FVector Right = FVector( Dir.Y, -Dir.X, 0.f);
-                                const bool bL = FlowActor->GetIntegration(Pos + Left  * Agent.AgentRadius * 2.f) >= 0.f;
-                                const bool bR = FlowActor->GetIntegration(Pos + Right * Agent.AgentRadius * 2.f) >= 0.f;
+                                const bool bL = FlowActor->GetIntegration(Pos + Left  * Cfg.AgentRadius * 2.f) >= 0.f;
+                                const bool bR = FlowActor->GetIntegration(Pos + Right * Cfg.AgentRadius * 2.f) >= 0.f;
                                 if      ( bL && !bR) Dir = (Dir + Left ).GetSafeNormal2D();
                                 else if (!bL &&  bR) Dir = (Dir + Right).GetSafeNormal2D();
                             }
@@ -193,7 +198,7 @@ void UFlowFieldRVOProcessor::Execute(
                             Agent.ForgetTimer    = 0.f; // 在范围内时重置遗忘计时
 
                             const float AttackRangeSq = FMath::Square(
-                                Agent.AttackRange > 0.f ? Agent.AttackRange : Agent.AgentRadius * 2.f);
+                                Cfg.AttackRange > 0.f ? Cfg.AttackRange : Cfg.AgentRadius * 2.f);
                             Agent.bInAttackRange =
                                 FVector::DistSquared2D(Pos, ChaseTargetPos) < AttackRangeSq;
 
@@ -201,7 +206,7 @@ void UFlowFieldRVOProcessor::Execute(
                             {
                                 const FVector Dir = CalcChaseDir(ChaseTargetPos);
                                 if (!Dir.IsNearlyZero())
-                                    PrefVel = RVO::Vector2(Dir.X * Agent.MoveSpeed, Dir.Y * Agent.MoveSpeed);
+                                    PrefVel = RVO::Vector2(Dir.X * Cfg.MoveSpeed, Dir.Y * Cfg.MoveSpeed);
                             }
                         }
                         else
@@ -211,19 +216,19 @@ void UFlowFieldRVOProcessor::Execute(
                             Agent.bInAttackRange = false;
                             // bChasingTarget 不在此处清除——由 BehaviorProcessor 的遗忘计时决定
 
-                            if (Agent.bChasingTarget && Agent.ForgetTime > 0.f)
+                            if (Agent.bChasingTarget && Cfg.ForgetTime > 0.f)
                             {
                                 // 遗忘期：继续朝上次已知位置移动
                                 const FVector Dir = CalcChaseDir(Agent.ChaseTargetPos);
                                 if (!Dir.IsNearlyZero())
-                                    PrefVel = RVO::Vector2(Dir.X * Agent.MoveSpeed, Dir.Y * Agent.MoveSpeed);
+                                    PrefVel = RVO::Vector2(Dir.X * Cfg.MoveSpeed, Dir.Y * Cfg.MoveSpeed);
                             }
                             else
                             {
                                 // 兜底：初始状态 / ForgetTime=0 / 遗忘完成 → 回归流场
                                 FVector FlowDir = FlowActor->GetFlowDirectionSmooth(Pos);
                                 if (!FlowDir.IsNearlyZero())
-                                    PrefVel = RVO::Vector2(FlowDir.X * Agent.MoveSpeed, FlowDir.Y * Agent.MoveSpeed);
+                                    PrefVel = RVO::Vector2(FlowDir.X * Cfg.MoveSpeed, FlowDir.Y * Cfg.MoveSpeed);
                             }
                         }
                     }
@@ -241,7 +246,7 @@ void UFlowFieldRVOProcessor::Execute(
                     {
                         const FFlowFieldTrackedTarget& CT = NoFlowTargets[TIdx];
                         if (FVector::DistSquared2D(Pos, CT.Position) <=
-                            FMath::Square(Agent.DetectRadius))
+                            FMath::Square(Cfg.DetectRadius))
                         {
                             Agent.bInChaseRange  = true;
                             Agent.bChasingTarget = true;
@@ -251,9 +256,9 @@ void UFlowFieldRVOProcessor::Execute(
                             bFoundTarget = true;
 
                             const float AttackRangeSq2 =
-                                FMath::Square(Agent.AttackRange > 0.f
-                                    ? Agent.AttackRange
-                                    : Agent.AgentRadius * 2.f);
+                                FMath::Square(Cfg.AttackRange > 0.f
+                                    ? Cfg.AttackRange
+                                    : Cfg.AgentRadius * 2.f);
                             Agent.bInAttackRange =
                                 FVector::DistSquared2D(Pos, CT.Position) < AttackRangeSq2;
 
@@ -263,8 +268,8 @@ void UFlowFieldRVOProcessor::Execute(
                                     (CT.Position - Pos).GetSafeNormal2D();
                                 if (!ChaseDir.IsNearlyZero())
                                     PrefVel = RVO::Vector2(
-                                        ChaseDir.X * Agent.MoveSpeed,
-                                        ChaseDir.Y * Agent.MoveSpeed);
+                                        ChaseDir.X * Cfg.MoveSpeed,
+                                        ChaseDir.Y * Cfg.MoveSpeed);
                             }
                             break;
                         }
@@ -275,14 +280,14 @@ void UFlowFieldRVOProcessor::Execute(
                         Agent.bInAttackRange = false;
                         // bChasingTarget 由 BehaviorProcessor 的遗忘计时决定是否清除
                         // 流场未就绪 + 无目标 + 遗忘期 → 朝最后位置移动；否则静止等待
-                        if (Agent.bChasingTarget && Agent.ForgetTime > 0.f
+                        if (Agent.bChasingTarget && Cfg.ForgetTime > 0.f
                             && !Agent.ChaseTargetPos.IsNearlyZero())
                         {
                             FVector ChaseDir = (Agent.ChaseTargetPos - Pos).GetSafeNormal2D();
                             if (!ChaseDir.IsNearlyZero())
                                 PrefVel = RVO::Vector2(
-                                    ChaseDir.X * Agent.MoveSpeed,
-                                    ChaseDir.Y * Agent.MoveSpeed);
+                                    ChaseDir.X * Cfg.MoveSpeed,
+                                    ChaseDir.Y * Cfg.MoveSpeed);
                         }
                     }
                 }
@@ -316,25 +321,16 @@ void UFlowFieldRVOProcessor::Execute(
                     }
                 }
 
-                // ── 人群密度限速 + 动态时间窗（Layer 2 & 3）─────────
-                if (Agent.CrowdDensityFullAt > 0)
+                // Layer 2&3：密集时压缩速度 + 缩短预判时间窗，形成蜂拥压迫效果
+                if (Cfg.CrowdDensityFullAt > 0)
                 {
                     const float DensityT = FMath::Clamp(
-                        float(Agent.LocalNeighborCount) / float(Agent.CrowdDensityFullAt),
-                        0.f, 1.f);
-
-                    // Layer 2：压缩期望速度幅值，使密集 AI 整体变慢
-                    const float SpeedMult = FMath::Lerp(1.f, Agent.CrowdSpeedMin, DensityT);
+                        float(Agent.LocalNeighborCount) / float(Cfg.CrowdDensityFullAt), 0.f, 1.f);
+                    const float SpeedMult = FMath::Lerp(1.f, Cfg.CrowdSpeedMin, DensityT);
                     PrefVel = PrefVel * SpeedMult;
-
-                    // Layer 3：动态时间窗——密集时缩短，AI 不再提前大幅侧移，接受更近间距
-                    const float DynHorizon = FMath::Lerp(
-                        Agent.RVOTimeHorizon, Agent.RVOTimeHorizon * 0.2f, DensityT);
+                    const float DynHorizon = FMath::Lerp(Cfg.RVOTimeHorizon, Cfg.RVOTimeHorizon * 0.2f, DensityT);
                     RVOSim->setAgentTimeHorizon((std::size_t)Agent.RVOAgentId, DynHorizon);
-
-                    // 同步限制 maxSpeed，防止 RVO 在绕行时突然加速超出期望幅值
-                    const float DynMaxSpeed = Agent.MoveSpeed * 1.2f * SpeedMult;
-                    RVOSim->setAgentMaxSpeed((std::size_t)Agent.RVOAgentId, DynMaxSpeed);
+                    RVOSim->setAgentMaxSpeed((std::size_t)Agent.RVOAgentId, Cfg.MoveSpeed * 1.2f * SpeedMult);
                 }
 
                 RVOSim->setAgentPrefVelocity((std::size_t)Agent.RVOAgentId, PrefVel);

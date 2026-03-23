@@ -1,4 +1,5 @@
 #include "MassAI/FlowFieldAttackProcessor.h"
+#include "MassAI/FlowFieldAgentConfig.h"
 #include "FlowFieldAttackComponent.h"
 #include "FlowFieldAttackTypes.h"
 #include "FlowFieldSubsystem.h"
@@ -30,6 +31,7 @@ void UFlowFieldAttackProcessor::ConfigureQueries(
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
     EntityQuery.AddRequirement<FMassActorFragment>(EMassFragmentAccess::ReadOnly,
         EMassFragmentPresence::Optional);
+    EntityQuery.AddConstSharedRequirement<FFlowFieldAgentConfig>();
     EntityQuery.RegisterWithProcessor(*this);
     RegisterQuery(EntityQuery);
 
@@ -39,6 +41,7 @@ void UFlowFieldAttackProcessor::ConfigureQueries(
     DeathLingerQuery.AddRequirement<FFlowFieldAgentFragment>(EMassFragmentAccess::ReadWrite);
     DeathLingerQuery.AddRequirement<FMassActorFragment>(EMassFragmentAccess::ReadOnly,
         EMassFragmentPresence::Optional);
+    DeathLingerQuery.AddConstSharedRequirement<FFlowFieldAgentConfig>();
     DeathLingerQuery.RegisterWithProcessor(*this);
     RegisterQuery(DeathLingerQuery);
 }
@@ -303,19 +306,20 @@ static void TickDeathLinger(
     Query.ForEachEntityChunk(Context,
         [&](FMassExecutionContext& ChunkCtx)
         {
+            const FFlowFieldAgentConfig& Cfg = ChunkCtx.GetConstSharedFragment<FFlowFieldAgentConfig>();
             auto Agents = ChunkCtx.GetMutableFragmentView<FFlowFieldAgentFragment>();
             const TConstArrayView<FMassEntityHandle> Handles = ChunkCtx.GetEntities();
             const int32 Num = ChunkCtx.GetNumEntities();
             for (int32 i = 0; i < Num; ++i)
             {
                 FFlowFieldAgentFragment& Agent = Agents[i];
-                if (!Agent.bAutoDestroy) continue;
-                if (Agent.DeathLingerTime <= 0.f)
+                if (!Cfg.bAutoDestroy) continue;
+                if (Cfg.DeathLingerTime <= 0.f)
                     Comp->GetPendingDestroys().AddUnique(Handles[i].Index);
                 else
                 {
                     Agent.DeathTimer += DeltaTime;
-                    if (Agent.DeathTimer >= Agent.DeathLingerTime)
+                    if (Agent.DeathTimer >= Cfg.DeathLingerTime)
                         Comp->GetPendingDestroys().AddUnique(Handles[i].Index);
                 }
             }

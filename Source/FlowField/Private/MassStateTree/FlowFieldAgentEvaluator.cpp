@@ -1,6 +1,7 @@
 #include "MassStateTree/FlowFieldAgentEvaluator.h"
 #include "MassStateTreeExecutionContext.h"
 #include "StateTreeLinker.h"
+#include "MassEntityManager.h"
 
 bool FFlowFieldAgentEvaluator::Link(FStateTreeLinker& Linker)
 {
@@ -22,7 +23,13 @@ void FFlowFieldAgentEvaluator::Tick(FStateTreeExecutionContext& Context, const f
     InstanceData.WorldRotation = Trans.GetTransform().GetRotation().Rotator();
 
     // ── 移动 ────────────────────────────────────────────────────
-    InstanceData.MoveSpeed            = Agent.MoveSpeed;
+    // MoveSpeed 来自 FFlowFieldAgentConfig（ConstSharedFragment）
+    const FMassStateTreeExecutionContext& MassContext =
+        static_cast<const FMassStateTreeExecutionContext&>(Context);
+    const FFlowFieldAgentConfig* Config =
+        MassContext.GetEntityManager().GetConstSharedFragmentDataPtr<FFlowFieldAgentConfig>(
+            MassContext.GetEntity());
+    InstanceData.MoveSpeed            = Config ? Config->MoveSpeed : 0.f;
     InstanceData.CurrentDir           = Agent.CurrentDir;
     InstanceData.SmoothedMoveVelocity = Agent.SmoothedMoveVelocity;
     InstanceData.RVOComputedVelocity  = Agent.RVOComputedVelocity;

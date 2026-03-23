@@ -1,4 +1,5 @@
 #include "MassAI/FlowFieldAgentTrait.h"
+#include "MassAI/FlowFieldAgentConfig.h"
 #include "VAT/FlowFieldVATFragment.h"
 #include "MassCommonFragments.h"
 #include "MassActorSubsystem.h"
@@ -9,24 +10,34 @@
 
 void UFlowFieldAgentTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const
 {
-    FFlowFieldAgentFragment& AgentFrag = BuildContext.AddFragment_GetRef<FFlowFieldAgentFragment>();
-    AgentFrag.MoveSpeed          = MoveSpeed;
-    AgentFrag.AgentRadius        = AgentRadius;
-    AgentFrag.DirSmoothing       = DirSmoothing;
-    AgentFrag.RVOTimeHorizon     = RVOTimeHorizon;
-    AgentFrag.RVONeighborDist    = (RVONeighborDist > 0.f) ? RVONeighborDist : AgentRadius * 5.f;
-    AgentFrag.RVOMaxNeighbors    = RVOMaxNeighbors;
-    AgentFrag.SurfaceZSmoothSpeed = SurfaceZSmoothSpeed;
-    AgentFrag.DetectRadius        = DetectRadius;
-    AgentFrag.ForgetTime          = ForgetTime;
-    AgentFrag.AttackRange         = AttackRange;
-    AgentFrag.AttackInterval      = AttackInterval;
-    AgentFrag.AttackDamage        = AttackDamage;
-    AgentFrag.CrowdSpeedMin         = CrowdSpeedMin;
-    AgentFrag.CrowdDensityFullAt    = CrowdDensityFullAt;
-    AgentFrag.CrowdInertiaSmoothing = CrowdInertiaSmoothing;
-    AgentFrag.bAutoDestroy          = bAutoDestroy;
-    AgentFrag.DeathLingerTime       = DeathLingerTime;
+    // ── ConstShared Config（同配置实体共享一份）──────────────────
+    FMassEntityManager& EntityManager = UE::Mass::Utils::GetEntityManagerChecked(World);
+
+    FFlowFieldAgentConfig Config;
+    Config.MoveSpeed             = MoveSpeed;
+    Config.AgentRadius           = AgentRadius;
+    Config.DirSmoothing          = DirSmoothing;
+    Config.RVOTimeHorizon        = RVOTimeHorizon;
+    Config.RVONeighborDist       = (RVONeighborDist > 0.f) ? RVONeighborDist : AgentRadius * 5.f;
+    Config.RVOMaxNeighbors       = RVOMaxNeighbors;
+    Config.SurfaceZSmoothSpeed   = SurfaceZSmoothSpeed;
+    Config.DetectRadius          = DetectRadius;
+    Config.ForgetTime            = ForgetTime;
+    Config.AttackRange           = AttackRange;
+    Config.AttackInterval        = AttackInterval;
+    Config.AttackDamage          = AttackDamage;
+    Config.CrowdSpeedMin         = CrowdSpeedMin;
+    Config.CrowdDensityFullAt    = CrowdDensityFullAt;
+    Config.CrowdInertiaSmoothing = CrowdInertiaSmoothing;
+    Config.bAutoDestroy          = bAutoDestroy;
+    Config.DeathLingerTime       = DeathLingerTime;
+    // MaxHP、KnockbackDecay、KnockbackStaggerDuration 使用默认值（Trait 暂不暴露这些）
+
+    FConstSharedStruct ConfigStruct = EntityManager.GetOrCreateConstSharedFragment(Config);
+    BuildContext.AddConstSharedFragment(ConfigStruct);
+
+    // ── 运行时 Fragment（初始值，Processor 运行时写入）──────────
+    BuildContext.AddFragment<FFlowFieldAgentFragment>();
 
     BuildContext.AddTag<FFlowFieldAgentTag>();
     BuildContext.AddTag<FFlowFieldMovingTag>();
@@ -97,8 +108,6 @@ void UFlowFieldAgentTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
         VisDesc.CustomDataFloats.Add(0.f);
 
         // 注册，获得 Handle
-        FMassEntityManager& EntityManager = UE::Mass::Utils::GetEntityManagerChecked(World);
-
         FMassRepresentationFragment& RepFrag = BuildContext.AddFragment_GetRef<FMassRepresentationFragment>();
         RepFrag.StaticMeshDescHandle = RepSub->FindOrAddStaticMeshDesc(VisDesc);
 

@@ -1,5 +1,6 @@
 #include "MassAI/FlowFieldBehaviorProcessor.h"
 #include "MassAI/FlowFieldAgentFragment.h"
+#include "MassAI/FlowFieldAgentConfig.h"
 #include "FlowFieldTargetComponent.h"
 #include "FlowFieldObstacleComponent.h"
 #include "FlowFieldSubsystem.h"
@@ -34,6 +35,7 @@ void UFlowFieldBehaviorProcessor::ConfigureQueries(
     // FMassActorFragment 仅非 VAT 路径有，Optional 兼容两种路径
     // ReadWrite 以便调用 GetMutableFragmentView（实际不修改 Fragment 内容）
     EntityQuery.AddRequirement<FMassActorFragment>(EMassFragmentAccess::ReadWrite, EMassFragmentPresence::Optional);
+    EntityQuery.AddConstSharedRequirement<FFlowFieldAgentConfig>();
     EntityQuery.RegisterWithProcessor(*this);
     RegisterQuery(EntityQuery);
 }
@@ -73,6 +75,8 @@ void UFlowFieldBehaviorProcessor::Execute(
     EntityQuery.ForEachEntityChunk(Context,
         [&](FMassExecutionContext& ChunkContext)
         {
+            const FFlowFieldAgentConfig& Cfg = ChunkContext.GetConstSharedFragment<FFlowFieldAgentConfig>();
+
             auto Agents     = ChunkContext.GetMutableFragmentView<FFlowFieldAgentFragment>();
             auto Transforms = ChunkContext.GetFragmentView<FTransformFragment>();
             const int32 Num = ChunkContext.GetNumEntities();
@@ -115,7 +119,7 @@ void UFlowFieldBehaviorProcessor::Execute(
                 if (Agent.bChasingTarget && !Agent.bInChaseRange)
                 {
                     // 出范围但仍在追踪：ForgetTime=0 立即遗忘，否则计时
-                    if (Agent.ForgetTime <= 0.f)
+                    if (Cfg.ForgetTime <= 0.f)
                     {
                         Agent.bChasingTarget = false;
                         Agent.ForgetTimer    = 0.f;
@@ -128,7 +132,7 @@ void UFlowFieldBehaviorProcessor::Execute(
                     else
                     {
                         Agent.ForgetTimer += DeltaTime;
-                        if (Agent.ForgetTimer >= Agent.ForgetTime)
+                        if (Agent.ForgetTimer >= Cfg.ForgetTime)
                         {
                             Agent.ForgetTimer    = 0.f;
                             Agent.bChasingTarget = false;
@@ -149,7 +153,7 @@ void UFlowFieldBehaviorProcessor::Execute(
                         TargetComp->OnAIEnterAttackRange(AIActor, EntityId);
                         TargetComp->OnAIEnterAttackRangeDelegate.Broadcast(AIActor, EntityId);
                         // 进入即打：预填满计时器，下次计时循环立即触发第一次攻击
-                        Agent.AttackTimer = Agent.AttackInterval;
+                        Agent.AttackTimer = Cfg.AttackInterval;
                     }
                     else if (!Agent.bInAttackRange && Agent.bWasInAttackRange && TargetComp)
                     {
@@ -160,11 +164,11 @@ void UFlowFieldBehaviorProcessor::Execute(
                     if (Agent.bInAttackRange && TargetComp)
                     {
                         Agent.AttackTimer += DeltaTime;
-                        if (Agent.AttackTimer >= Agent.AttackInterval)
+                        if (Agent.AttackTimer >= Cfg.AttackInterval)
                         {
                             Agent.AttackTimer = 0.f;
-                            TargetComp->OnAIAttack(AIActor, EntityId, Agent.AttackDamage);
-                            TargetComp->OnAIAttackDelegate.Broadcast(AIActor, EntityId, Agent.AttackDamage);
+                            TargetComp->OnAIAttack(AIActor, EntityId, Cfg.AttackDamage);
+                            TargetComp->OnAIAttackDelegate.Broadcast(AIActor, EntityId, Cfg.AttackDamage);
                         }
                     }
                     else
@@ -208,7 +212,7 @@ void UFlowFieldBehaviorProcessor::Execute(
                     {
                         OComp->OnAIReach(AIActor, EntityId);
                         OComp->OnAIReachDelegate.Broadcast(AIActor, EntityId);
-                        Agent.AttackTimer = Agent.AttackInterval; // 到达即打
+                        Agent.AttackTimer = Cfg.AttackInterval; // 到达即打
                     }
                 }
                 else if (!bAtWall && Agent.bWasAtWall)
@@ -234,11 +238,11 @@ void UFlowFieldBehaviorProcessor::Execute(
                     if (OComp)
                     {
                         Agent.AttackTimer += DeltaTime;
-                        if (Agent.AttackTimer >= Agent.AttackInterval)
+                        if (Agent.AttackTimer >= Cfg.AttackInterval)
                         {
                             Agent.AttackTimer = 0.f;
-                            OComp->OnAIAttackObstacle(AIActor, EntityId, Agent.AttackDamage);
-                            OComp->OnAIAttackObstacleDelegate.Broadcast(AIActor, EntityId, Agent.AttackDamage);
+                            OComp->OnAIAttackObstacle(AIActor, EntityId, Cfg.AttackDamage);
+                            OComp->OnAIAttackObstacleDelegate.Broadcast(AIActor, EntityId, Cfg.AttackDamage);
                         }
                     }
                 }
@@ -257,7 +261,7 @@ void UFlowFieldBehaviorProcessor::Execute(
                     {
                         DrawDebugCircle(World,
                             FVector(Pos.X, Pos.Y, Pos.Z + 5.f),
-                            Agent.DetectRadius,
+                            Cfg.DetectRadius,
                             32, FColor(0, 200, 255),
                             false, 0.f, 0, 1.f,
                             FVector(1,0,0), FVector(0,1,0));

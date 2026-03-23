@@ -1,4 +1,5 @@
-﻿ #include "MassAI/FlowFieldClientInterpProcessor.h"
+﻿#include "MassAI/FlowFieldClientInterpProcessor.h"
+#include "MassAI/FlowFieldAgentConfig.h"
 #include "MassExecutionContext.h"
 #include "MassEntityManager.h"
 #include "MassCommonTypes.h"
@@ -22,6 +23,7 @@ void UFlowFieldClientInterpProcessor::ConfigureQueries(
     EntityQuery.AddTagRequirement<FFlowFieldMovingTag>(EMassFragmentPresence::All);
     EntityQuery.AddRequirement<FFlowFieldAgentFragment>(EMassFragmentAccess::ReadWrite);
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
+    EntityQuery.AddConstSharedRequirement<FFlowFieldAgentConfig>();
     EntityQuery.RegisterWithProcessor(*this);
     RegisterQuery(EntityQuery);
 }
@@ -40,6 +42,8 @@ void UFlowFieldClientInterpProcessor::Execute(
     EntityQuery.ForEachEntityChunk(Context,
         [&](FMassExecutionContext& ChunkContext)
         {
+            const FFlowFieldAgentConfig& Cfg = ChunkContext.GetConstSharedFragment<FFlowFieldAgentConfig>();
+
             auto Agents     = ChunkContext.GetMutableFragmentView<FFlowFieldAgentFragment>();
             auto Transforms = ChunkContext.GetMutableFragmentView<FTransformFragment>();
             const int32 Num = ChunkContext.GetNumEntities();
@@ -97,7 +101,7 @@ void UFlowFieldClientInterpProcessor::Execute(
                         && LocalZ != 0.f && FMath::Abs(LocalZ - Pos.Z) <= 500.f)
                     {
                         Agent.SmoothedSurfaceZ = FMath::FInterpTo(
-                            Agent.SmoothedSurfaceZ, LocalZ, DeltaTime, Agent.SurfaceZSmoothSpeed);
+                            Agent.SmoothedSurfaceZ, LocalZ, DeltaTime, Cfg.SurfaceZSmoothSpeed);
 
                         FVector FixPos = Pos;
                         FixPos.Z = Agent.SmoothedSurfaceZ;

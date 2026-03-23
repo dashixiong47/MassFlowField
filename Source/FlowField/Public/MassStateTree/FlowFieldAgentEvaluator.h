@@ -3,6 +3,7 @@
 #include "MassStateTreeTypes.h"
 #include "MassCommonFragments.h"
 #include "MassAI/FlowFieldAgentFragment.h"
+#include "MassAI/FlowFieldAgentConfig.h"
 #include "FlowFieldAgentEvaluator.generated.h"
 
 /**

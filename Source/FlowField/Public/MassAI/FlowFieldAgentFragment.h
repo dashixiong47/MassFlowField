@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "CoreMinimal.h"
 #include "MassEntityTypes.h"
 #include "FlowFieldAgentFragment.generated.h"
@@ -29,53 +29,46 @@ struct FLOWFIELD_API FFlowFieldAgentFragment : public FMassFragment
 {
     GENERATED_BODY()
 
-    // ── 移动 ──────────────────────────────────────────────────────
-    UPROPERTY() float   MoveSpeed    = 300.f;
-    UPROPERTY() float   AgentRadius  = 60.f;
+    // ── 移动（运行时状态）────────────────────────────────────────
     UPROPERTY() FVector CurrentDir   = FVector::ZeroVector;
-    UPROPERTY() float   DirSmoothing = 10.f;
 
-    // ── RVO2 ──────────────────────────────────────────────────────
+    // ── RVO2（运行时状态）────────────────────────────────────────
     UPROPERTY() int32   RVOAgentId           = -1;              // RVO sim 内的 agent 索引
     UPROPERTY() FVector RVOComputedVelocity  = FVector::ZeroVector; // RVO 输出速度（cm/s）
     UPROPERTY() FVector SmoothedMoveVelocity = FVector::ZeroVector; // 平滑后的移动速度，消抖用
     UPROPERTY() bool    bInStopZone          = false;               // 已贴墙停止，朝向障碍
 
-    // RVO 参数（由 Trait 写入，运行时只读）
-    UPROPERTY() float   RVOTimeHorizon       = 1.5f;  // 预测碰撞的时间窗（s），越大越平滑但分散越慢
-    UPROPERTY() float   RVONeighborDist      = 0.f;   // 感知范围（cm），0 = 运行时自动算 AgentRadius*5
-    UPROPERTY() int32   RVOMaxNeighbors      = 10;    // 最多感知几个邻居
+    // ── 生命值（运行时，AttackProcessor 更新）────────────────────
+    UPROPERTY() float   HP = 100.f; // 当前血量
 
-    // ── 死亡（由 Trait 写入配置，运行时由 AttackProcessor 更新）────
-    UPROPERTY() bool  bAutoDestroy    = true;  // 死亡后自动销毁（false=等 BP 手动调 DestroyAgent）
-    UPROPERTY() float DeathLingerTime = 0.f;   // 延迟销毁时间（s），0=立即，>0 可播放死亡动画
-    UPROPERTY() float DeathTimer      = 0.f;   // 运行时计时器（不需要 Trait 配置）
+    // ── 状态标志 & 动画（网络同步用）────────────────────────────
+    UPROPERTY() uint8  StateFlags    = 0;   // 位掩码，bit 含义由游戏层定义
+    UPROPERTY() uint16 AnimMontageId = 0;   // 当前播放的 Montage ID，0 = 无
 
-    // ── 人群压力（由 Trait 写入，LocalNeighborCount 由 RVO Pass2 更新）──
-    UPROPERTY() int32   LocalNeighborCount    = 0;     // 当帧 RVO 实际邻居数（供下帧密度计算）
-    UPROPERTY() float   CrowdSpeedMin         = 0.25f; // 密集时速度下限（占 MoveSpeed 的比例，0~1）
-    UPROPERTY() int32   CrowdDensityFullAt    = 8;     // 达到最大限速所需邻居数
-    UPROPERTY() float   CrowdInertiaSmoothing = 2.f;   // 密集时速度平滑速度（越小越重）
+    // ── 死亡（运行时）────────────────────────────────────────────
+    UPROPERTY() float DeathTimer = 0.f;   // 运行时计时器
+
+    // ── 人群压力（运行时，RVO Pass2 更新）────────────────────────
+    UPROPERTY() int32 LocalNeighborCount = 0; // 当帧 RVO 实际邻居数（供下帧密度计算）
 
     // 上一帧已知目标位置，用于检测目标切换
     // 注意：不能用 FLT_MAX，WorldToCell 会整数溢出导致切换检测永远失效
     UPROPERTY() FVector LastKnownGoal = FVector(-99999999.f, -99999999.f, 0.f);
 
-    // ── 地面贴合 ──────────────────────────────────────────────────
+    // ── 地面贴合（运行时）────────────────────────────────────────
     UPROPERTY() float   SmoothedSurfaceZ    = 0.f;
     UPROPERTY() bool    bSurfaceInitialized = false;
-    UPROPERTY() float   SurfaceZSmoothSpeed = 10.f;
 
     // ── 服务端位置校正 ────────────────────────────────────────────
     UPROPERTY() FVector CorrectionTargetLocation = FVector::ZeroVector;
     UPROPERTY() float   CorrectionTargetYaw      = 0.f;
     UPROPERTY() bool    bHasCorrection           = false;
 
-    // ── 击退 ──────────────────────────────────────────────────────
+    // ── 击退（运行时）────────────────────────────────────────────
     UPROPERTY() FVector KnockbackVelocity         = FVector::ZeroVector; // 当前击退速度（cm/s）
-    UPROPERTY() float   KnockbackDecay            = 5.f;                 // 衰减系数，越大停得越快
     UPROPERTY() bool    bIsKnockedBack            = false;               // 是否正在被击退
-    UPROPERTY() float   KnockbackStaggerDuration  = 0.f;                 // 击退结束后停顿总时长（s）
+    UPROPERTY() float   KnockbackDecay            = 5.f;                 // 衰减系数（每次 ApplyKnockback 写入）
+    UPROPERTY() float   KnockbackStaggerDuration  = 0.f;                 // 击退结束后停顿时长（每次 ApplyKnockback 写入）
     UPROPERTY() float   KnockbackStaggerRemaining = 0.f;                 // 停顿剩余时间倒计时（s）
 
     // ── 减速 / 眩晕（由 AttackProcessor 写入，MovementProcessor 读取）──
@@ -83,20 +76,11 @@ struct FLOWFIELD_API FFlowFieldAgentFragment : public FMassFragment
     UPROPERTY() float   SlowTimeRemaining  = 0.f;   // 减速剩余时间（s）
     UPROPERTY() float   StunTimeRemaining  = 0.f;   // 眩晕剩余时间（s），>0 时停止主动移动
 
-    // ── 追踪目标 ──────────────────────────────────────────────────
+    // ── 追踪目标（运行时）────────────────────────────────────────
     UPROPERTY() bool    bAtWall         = false;               // 是否已贴附目标障碍物包围圈（攻城模式）
     UPROPERTY() bool    bChasingTarget  = false;               // 是否正在追踪动态目标
     UPROPERTY() FVector ChaseTargetPos  = FVector::ZeroVector; // 当前追踪的目标世界位置
     UPROPERTY() bool    bInAttackRange  = false;               // 是否进入攻击距离
-    UPROPERTY() float   AttackRange     = 120.f;               // 攻击距离（cm），由 Trait 写入
-
-    // ── 感知配置（由 Trait 写入）─────────────────────────────────
-    UPROPERTY() float   DetectRadius    = 500.f; // AI 感知/追踪范围（cm），替代目标侧 ChaseRadius
-    UPROPERTY() float   ForgetTime      = 2.0f;  // 离开感知范围后继续追踪的时间（s），0 = 立即遗忘
-
-    // ── 攻击配置（由 Trait 写入）─────────────────────────────────
-    UPROPERTY() float   AttackInterval  = 1.0f;  // 攻击间隔（s）
-    UPROPERTY() float   AttackDamage    = 10.f;  // 每次伤害
 
     // ── 事件系统运行时状态（由各 Processor 写入）─────────────────
     UPROPERTY() float   AttackTimer      = 0.f;   // 攻击/障碍攻击累计计时（s）

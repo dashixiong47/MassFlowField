@@ -24,6 +24,7 @@ void UFlowFieldMovementProcessor::ConfigureQueries(
     EntityQuery.AddTagRequirement<FFlowFieldMovingTag>(EMassFragmentPresence::Optional);
     EntityQuery.AddRequirement<FFlowFieldAgentFragment>(EMassFragmentAccess::ReadWrite);
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
+    EntityQuery.AddConstSharedRequirement<FFlowFieldAgentConfig>();
     EntityQuery.RegisterWithProcessor(*this);
     RegisterQuery(EntityQuery);
 }
@@ -49,6 +50,8 @@ void UFlowFieldMovementProcessor::Execute(
     EntityQuery.ForEachEntityChunk(Context,
         [&](FMassExecutionContext& ChunkContext)
         {
+            const FFlowFieldAgentConfig& Cfg = ChunkContext.GetConstSharedFragment<FFlowFieldAgentConfig>();
+
             auto Agents     = ChunkContext.GetMutableFragmentView<FFlowFieldAgentFragment>();
             auto Transforms = ChunkContext.GetMutableFragmentView<FTransformFragment>();
             const int32 Num = ChunkContext.GetNumEntities();
@@ -154,7 +157,7 @@ void UFlowFieldMovementProcessor::Execute(
                         else if (bFlowReady)
                         {
                             Agent.SmoothedSurfaceZ = FMath::FInterpTo(
-                                Agent.SmoothedSurfaceZ, RawZ, DeltaTime, Agent.SurfaceZSmoothSpeed);
+                                Agent.SmoothedSurfaceZ, RawZ, DeltaTime, Cfg.SurfaceZSmoothSpeed);
                         }
                     }
                 }
@@ -177,11 +180,10 @@ void UFlowFieldMovementProcessor::Execute(
                     continue;
                 }
 
-                // ── Layer 1：密度自适应惯性 ───────────────────────────
-                // 邻居越多，速度平滑速度越低（响应越慢 = 越重），防止单个 AI 推动整群
-                const float EffectiveSmoothSpeed = (Agent.CrowdDensityFullAt > 0 && Agent.LocalNeighborCount > 0)
-                    ? FMath::Lerp(VelocitySmoothSpeed, Agent.CrowdInertiaSmoothing,
-                        FMath::Clamp(float(Agent.LocalNeighborCount) / float(Agent.CrowdDensityFullAt), 0.f, 1.f))
+                // Layer 1：密度自适应惯性——邻居越多移动越"重"，形成丧尸群压迫感
+                const float EffectiveSmoothSpeed = (Cfg.CrowdDensityFullAt > 0 && Agent.LocalNeighborCount > 0)
+                    ? FMath::Lerp(VelocitySmoothSpeed, Cfg.CrowdInertiaSmoothing,
+                        FMath::Clamp(float(Agent.LocalNeighborCount) / float(Cfg.CrowdDensityFullAt), 0.f, 1.f))
                     : VelocitySmoothSpeed;
 
                 if (!bFlowReady)
@@ -189,7 +191,7 @@ void UFlowFieldMovementProcessor::Execute(
                     // 无流场：仅处理追踪（或被推挤）状态下的移动
                     const bool bHasVelocity =
                         Agent.RVOComputedVelocity.SizeSquared2D() >
-                        FMath::Square(Agent.MoveSpeed * VelocityDeadZonePct);
+                        FMath::Square(Cfg.MoveSpeed * VelocityDeadZonePct);
                     if (!Agent.bChasingTarget && !bHasVelocity) continue;
                     if (Agent.StunTimeRemaining > 0.f) continue;
 
@@ -202,7 +204,7 @@ void UFlowFieldMovementProcessor::Execute(
                             Agent.CurrentDir = Agent.CurrentDir.IsNearlyZero()
                                 ? RotDir
                                 : FMath::VInterpTo(Agent.CurrentDir, RotDir,
-                                    DeltaTime, Agent.DirSmoothing).GetSafeNormal2D();
+                                    DeltaTime, Cfg.DirSmoothing).GetSafeNormal2D();
                             Transform.SetRotation(FMath::RInterpTo(CurRotator,
                                 Agent.CurrentDir.ToOrientationRotator(),
                                 DeltaTime, RotationInterpSpeed).Quaternion());
@@ -235,7 +237,7 @@ void UFlowFieldMovementProcessor::Execute(
                         NoFlowVel *= FMath::Clamp(Agent.SlowFactor, 0.f, 1.f);
 
                     if (NoFlowVel.SizeSquared2D() >
-                        FMath::Square(Agent.MoveSpeed * VelocityDeadZonePct))
+                        FMath::Square(Cfg.MoveSpeed * VelocityDeadZonePct))
                     {
                         Transform.SetLocation(FVector(
                             Pos.X + NoFlowVel.X * DeltaTime,
@@ -267,7 +269,7 @@ void UFlowFieldMovementProcessor::Execute(
                     {
                         Agent.CurrentDir = Agent.CurrentDir.IsNearlyZero()
                             ? TargetDir
-                            : FMath::VInterpTo(Agent.CurrentDir, TargetDir, DeltaTime, Agent.DirSmoothing).GetSafeNormal2D();
+                            : FMath::VInterpTo(Agent.CurrentDir, TargetDir, DeltaTime, Cfg.DirSmoothing).GetSafeNormal2D();
                         Transform.SetRotation(FMath::RInterpTo(
                             CurRotator,
                             Agent.CurrentDir.ToOrientationRotator(),
@@ -292,7 +294,7 @@ void UFlowFieldMovementProcessor::Execute(
                     {
                         Agent.CurrentDir = Agent.CurrentDir.IsNearlyZero()
                             ? FaceDir3D
-                            : FMath::VInterpTo(Agent.CurrentDir, FaceDir3D, DeltaTime, Agent.DirSmoothing).GetSafeNormal2D();
+                            : FMath::VInterpTo(Agent.CurrentDir, FaceDir3D, DeltaTime, Cfg.DirSmoothing).GetSafeNormal2D();
                         Transform.SetRotation(FMath::RInterpTo(
                             CurRotator,
                             Agent.CurrentDir.ToOrientationRotator(),
@@ -309,7 +311,13 @@ void UFlowFieldMovementProcessor::Execute(
                 const FVector GoalDir2D = (FlowActor->CurrentGoal - Pos).GetSafeNormal2D();
                 FVector RotDir;
 
-                if (Agent.bChasingTarget && !Agent.ChaseTargetPos.IsZero())
+                if (Agent.bAtWall)
+                {
+                    // 攻城贴墙：强制朝向目标，不跟流场方向
+                    RotDir = (FlowActor->CurrentGoal - Pos).GetSafeNormal2D();
+                    if (RotDir.IsNearlyZero()) RotDir = Agent.CurrentDir;
+                }
+                else if (Agent.bChasingTarget && !Agent.ChaseTargetPos.IsZero())
                 {
                     RotDir = (Agent.ChaseTargetPos - Pos).GetSafeNormal2D();
                     if (RotDir.IsNearlyZero()) RotDir = Agent.CurrentDir;
@@ -330,7 +338,7 @@ void UFlowFieldMovementProcessor::Execute(
                 {
                     Agent.CurrentDir = Agent.CurrentDir.IsNearlyZero()
                         ? RotDir
-                        : FMath::VInterpTo(Agent.CurrentDir, RotDir, DeltaTime, Agent.DirSmoothing).GetSafeNormal2D();
+                        : FMath::VInterpTo(Agent.CurrentDir, RotDir, DeltaTime, Cfg.DirSmoothing).GetSafeNormal2D();
                 }
 
                 if (!Agent.CurrentDir.IsNearlyZero())
@@ -348,7 +356,7 @@ void UFlowFieldMovementProcessor::Execute(
                 FVector MoveVel = Agent.SmoothedMoveVelocity;
 
                 // 速度死区：低于 MoveSpeed × VelocityDeadZonePct 视为静止
-                if (MoveVel.SizeSquared2D() < FMath::Square(Agent.MoveSpeed * VelocityDeadZonePct)) continue;
+                if (MoveVel.SizeSquared2D() < FMath::Square(Cfg.MoveSpeed * VelocityDeadZonePct)) continue;
 
                 // 被挤减速：实际速度方向与流场期望方向越不一致，速度越慢
                 // 追踪目标时跳过此检测（方向本就和流场相反，不应被压速）

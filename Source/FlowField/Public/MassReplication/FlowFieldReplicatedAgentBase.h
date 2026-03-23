@@ -22,6 +22,10 @@ struct FLOWFIELD_API FFlowFieldReplicatedAgentBase : public FReplicatedAgentBase
 		return PositionYawData;
 	}
 
+	// ── 状态标志 & 动画（游戏层通用字段，具体含义由项目定义）──
+	UPROPERTY() uint8  StateFlags    = 0;
+	UPROPERTY() uint16 AnimMontageId = 0;
+
 private:
 	UPROPERTY()
 	FReplicatedAgentPositionYawData PositionYawData;
